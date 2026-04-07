@@ -67,6 +67,15 @@ pub enum WireRequest {
         message: String,
         /// Optional sender identity.
         sender: Option<String>,
+        /// Tenant/organization ID for multi-tenant scoping.
+        #[serde(default)]
+        tenant_id: Option<String>,
+        /// User ID of the person interacting with the agent.
+        #[serde(default)]
+        user_id: Option<String>,
+        /// Group/channel ID for shared conversations.
+        #[serde(default)]
+        group_id: Option<String>,
     },
     /// Ping to check if the peer is alive.
     #[serde(rename = "ping")]
@@ -146,6 +155,9 @@ pub struct RemoteAgentInfo {
     pub tools: Vec<String>,
     /// Current state.
     pub state: String,
+    /// Tenant/organization ID that owns this agent.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 /// Current protocol version.
@@ -204,6 +216,7 @@ mod tests {
                     tags: vec!["code".to_string()],
                     tools: vec!["file_read".to_string()],
                     state: "running".to_string(),
+                    tenant_id: None,
                 }],
                 nonce: "test-nonce".to_string(),
                 auth_hmac: "test-hmac".to_string(),
@@ -224,6 +237,9 @@ mod tests {
                 agent: "coder".to_string(),
                 message: "Write a hello world".to_string(),
                 sender: Some("orchestrator".to_string()),
+                tenant_id: None,
+                user_id: None,
+                group_id: None,
             }),
         };
         let bytes = encode_message(&msg).unwrap();
@@ -269,6 +285,7 @@ mod tests {
                     tags: vec![],
                     tools: vec![],
                     state: "running".to_string(),
+                    tenant_id: None,
                 },
             }),
         };

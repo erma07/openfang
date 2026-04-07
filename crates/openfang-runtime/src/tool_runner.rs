@@ -296,8 +296,8 @@ pub async fn execute_tool(
         }
 
         // Inter-agent tools (require kernel handle)
-        "agent_send" => tool_agent_send(input, kernel).await,
-        "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id).await,
+        "agent_send" => tool_agent_send(input, kernel, ctx).await,
+        "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id, ctx).await,
         "agent_list" => tool_agent_list(kernel),
         "agent_kill" => tool_agent_kill(input, kernel),
 
@@ -497,7 +497,7 @@ pub async fn execute_tool(
                                 server = server_name,
                                 "Dispatching to MCP server"
                             );
-                            match conn.call_tool(other, input).await {
+                            match conn.call_tool(other, input, ctx).await {
                                 Ok(content) => Ok(content),
                                 Err(e) => Err(format!("MCP tool call failed: {e}")),
                             }
@@ -1628,6 +1628,7 @@ fn require_kernel(
 async fn tool_agent_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = input["agent_id"]
@@ -1649,7 +1650,7 @@ async fn tool_agent_send(
 
     AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message).await
+            kh.send_to_agent(agent_id, message, ctx).await
         })
         .await
 }
@@ -1658,12 +1659,13 @@ async fn tool_agent_spawn(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     parent_id: Option<&str>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let manifest_toml = input["manifest_toml"]
         .as_str()
         .ok_or("Missing 'manifest_toml' parameter")?;
-    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await?;
+    let (id, name) = kh.spawn_agent(manifest_toml, parent_id, ctx).await?;
     Ok(format!(
         "Agent spawned successfully.\n  ID: {id}\n  Name: {name}"
     ))
@@ -2529,7 +2531,9 @@ async fn tool_a2a_send(
 
     let session_id = input["session_id"].as_str();
     let client = crate::a2a::A2aClient::new();
-    let task = client.send_task(&url, message, session_id).await?;
+    // TODO: propagate RequestContext from the agent's runtime context
+    let ctx = openfang_types::context::RequestContext::default();
+    let task = client.send_task(&url, message, session_id, &ctx).await?;
 
     serde_json::to_string_pretty(&task).map_err(|e| format!("Serialization error: {e}"))
 }

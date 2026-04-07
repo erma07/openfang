@@ -364,6 +364,7 @@ async fn test_workflow_e2e_with_groq() {
         .run_workflow(
             wf_id,
             "The Rust programming language is growing rapidly.".to_string(),
+            openfang_types::context::RequestContext::default(),
         )
         .await;
 

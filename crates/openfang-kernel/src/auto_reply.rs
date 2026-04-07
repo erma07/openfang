@@ -100,7 +100,7 @@ impl AutoReplyEngine {
 
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(timeout_secs),
-                kernel_handle.send_to_agent(&agent_id.to_string(), &message),
+                kernel_handle.send_to_agent(&agent_id.to_string(), &message, &openfang_types::context::RequestContext::default()),
             )
             .await;
 

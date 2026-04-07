@@ -21,6 +21,12 @@ pub struct WakePayload {
     /// When to process the event.
     #[serde(default)]
     pub mode: WakeMode,
+    /// Optional tenant ID for multi-tenant scoping.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    /// Optional user ID of the webhook caller.
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 /// Payload for POST /hooks/agent — run an isolated agent turn.
@@ -43,6 +49,12 @@ pub struct AgentHookPayload {
     /// Timeout in seconds (default 120, max 600).
     #[serde(default = "default_hook_timeout")]
     pub timeout_secs: u64,
+    /// Optional tenant ID for multi-tenant scoping.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    /// Optional user ID of the webhook caller.
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 fn default_hook_timeout() -> u64 {
@@ -141,6 +153,8 @@ mod tests {
         let p = WakePayload {
             text: "deploy complete".to_string(),
             mode: WakeMode::Now,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -150,6 +164,8 @@ mod tests {
         let p = WakePayload {
             text: "line one\nline two\nline three".to_string(),
             mode: WakeMode::NextHeartbeat,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -159,6 +175,8 @@ mod tests {
         let p = WakePayload {
             text: String::new(),
             mode: WakeMode::Now,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("must not be empty"), "got: {err}");
@@ -169,6 +187,8 @@ mod tests {
         let p = WakePayload {
             text: "x".repeat(4097),
             mode: WakeMode::Now,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("exceeds maximum length"), "got: {err}");
@@ -179,6 +199,8 @@ mod tests {
         let p = WakePayload {
             text: "a".repeat(4096),
             mode: WakeMode::Now,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -188,6 +210,8 @@ mod tests {
         let p = WakePayload {
             text: "hello\x00world".to_string(),
             mode: WakeMode::Now,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("control character"), "got: {err}");
@@ -198,6 +222,8 @@ mod tests {
         let p = WakePayload {
             text: "col1\tcol2".to_string(),
             mode: WakeMode::Now,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("control character"), "got: {err}");
@@ -214,6 +240,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 120,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -227,6 +255,8 @@ mod tests {
             channel: Some("slack-ops".to_string()),
             model: Some("claude-sonnet-4-20250514".to_string()),
             timeout_secs: 300,
+            tenant_id: Some("tenant-1".to_string()),
+            user_id: Some("user-42".to_string()),
         };
         assert!(p.validate().is_ok());
     }
@@ -240,6 +270,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 120,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("must not be empty"), "got: {err}");
@@ -254,6 +286,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 120,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("exceeds maximum length"), "got: {err}");
@@ -268,6 +302,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 120,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -281,6 +317,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 5,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("timeout_secs must be between"), "got: {err}");
@@ -295,6 +333,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 601,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("timeout_secs must be between"), "got: {err}");
@@ -309,6 +349,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 10,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -322,6 +364,8 @@ mod tests {
             channel: None,
             model: None,
             timeout_secs: 600,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -335,6 +379,8 @@ mod tests {
             channel: Some("c".repeat(65)),
             model: None,
             timeout_secs: 120,
+            tenant_id: None,
+            user_id: None,
         };
         let err = p.validate().unwrap_err();
         assert!(err.contains("channel name exceeds"), "got: {err}");
@@ -349,6 +395,8 @@ mod tests {
             channel: Some("c".repeat(64)),
             model: None,
             timeout_secs: 120,
+            tenant_id: None,
+            user_id: None,
         };
         assert!(p.validate().is_ok());
     }
@@ -360,6 +408,8 @@ mod tests {
         let orig = WakePayload {
             text: "something happened".to_string(),
             mode: WakeMode::Now,
+            tenant_id: None,
+            user_id: None,
         };
         let json = serde_json::to_string(&orig).unwrap();
         let back: WakePayload = serde_json::from_str(&json).unwrap();
@@ -372,6 +422,8 @@ mod tests {
         let orig = WakePayload {
             text: "deferred event".to_string(),
             mode: WakeMode::NextHeartbeat,
+            tenant_id: None,
+            user_id: None,
         };
         let json = serde_json::to_string(&orig).unwrap();
         assert!(json.contains("\"next_heartbeat\""));
@@ -395,6 +447,8 @@ mod tests {
             channel: Some("slack-alerts".to_string()),
             model: Some("gemini-2.5-flash".to_string()),
             timeout_secs: 300,
+            tenant_id: Some("t1".to_string()),
+            user_id: Some("u1".to_string()),
         };
         let json = serde_json::to_string(&orig).unwrap();
         let back: AgentHookPayload = serde_json::from_str(&json).unwrap();

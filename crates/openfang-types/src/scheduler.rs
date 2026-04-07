@@ -186,6 +186,12 @@ pub struct CronJob {
     pub last_run: Option<DateTime<Utc>>,
     /// When the job is next expected to fire.
     pub next_run: Option<DateTime<Utc>>,
+    /// Tenant ID for multi-tenant scoping.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    /// User who created this job.
+    #[serde(default)]
+    pub created_by_user_id: Option<String>,
 }
 
 impl CronJob {
@@ -427,6 +433,8 @@ mod tests {
             created_at: Utc::now(),
             last_run: None,
             next_run: None,
+            tenant_id: None,
+            created_by_user_id: None,
         }
     }
 

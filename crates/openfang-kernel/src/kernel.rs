@@ -4011,6 +4011,13 @@ impl OpenFangKernel {
         // Evaluate triggers before publishing (so describe_event works on the event)
         let triggered = self.triggers.evaluate(&event);
 
+        // Extract ctx from the event so triggered agents inherit identity
+        let event_ctx = openfang_types::context::RequestContext {
+            tenant_id: event.tenant_id.clone(),
+            user_id: event.user_id.clone(),
+            group_id: event.group_id.clone(),
+        };
+
         // Publish to the event bus
         self.event_bus.publish(event).await;
 
@@ -4020,8 +4027,11 @@ impl OpenFangKernel {
                 if let Some(kernel) = weak.upgrade() {
                     let aid = *agent_id;
                     let msg = message.clone();
+                    let ctx = event_ctx.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = kernel.send_message(aid, &msg).await {
+                        if let Err(e) = kernel.send_message_with_handle_and_blocks(
+                            aid, &msg, None, None, None, None, ctx,
+                        ).await {
                             warn!(agent = %aid, "Trigger dispatch failed: {e}");
                         }
                     });
@@ -4079,6 +4089,7 @@ impl OpenFangKernel {
         &self,
         workflow_id: WorkflowId,
         input: String,
+        ctx: openfang_types::context::RequestContext,
     ) -> KernelResult<(WorkflowRunId, String)> {
         let run_id = self
             .workflows
@@ -4104,8 +4115,17 @@ impl OpenFangKernel {
         };
 
         // Message sender: sends to agent and returns (output, in_tokens, out_tokens)
-        let send_message = |agent_id: AgentId, message: String| async move {
-            self.send_message(agent_id, &message)
+        let send_message = |agent_id: AgentId, message: String| {
+            let ctx = ctx.clone();
+            async move {
+                let handle: Option<Arc<dyn kernel_handle::KernelHandle>> = self
+                    .self_handle
+                    .get()
+                    .and_then(|w| w.upgrade())
+                    .map(|arc| arc as Arc<dyn kernel_handle::KernelHandle>);
+                self.send_message_with_handle_and_blocks(
+                    agent_id, &message, handle, None, None, None, ctx,
+                )
                 .await
                 .map(|r| {
                     (
@@ -4115,6 +4135,7 @@ impl OpenFangKernel {
                     )
                 })
                 .map_err(|e| format!("{e}"))
+            }
         };
 
         // SECURITY: Global workflow timeout to prevent runaway execution.
@@ -4772,13 +4793,26 @@ impl OpenFangKernel {
             info!(agent = %name, id = %agent_id, "Registered proactive triggers");
         }
 
+        // Build request context from agent's registry entry
+        let bg_ctx = {
+            let entry = self.registry.get(agent_id);
+            openfang_types::context::RequestContext {
+                tenant_id: entry.as_ref().and_then(|e| e.tenant_id.clone()),
+                user_id: entry.as_ref().and_then(|e| e.owner_user_id.clone()),
+                ..Default::default()
+            }
+        };
+
         // Start continuous/periodic loops
         let kernel = Arc::clone(self);
         self.background
             .start_agent(agent_id, name, schedule, move |aid, msg| {
                 let k = Arc::clone(&kernel);
+                let ctx = bg_ctx.clone();
                 tokio::spawn(async move {
-                    match k.send_message(aid, &msg).await {
+                    match k.send_message_with_handle_and_blocks(
+                        aid, &msg, None, None, None, None, ctx,
+                    ).await {
                         Ok(_) => {}
                         Err(e) => {
                             // send_message already records the panic in supervisor,
@@ -5837,6 +5871,13 @@ impl OpenFangKernel {
         let agent_id = job.agent_id;
         let job_name = &job.name;
 
+        // Build request context from cron job fields
+        let ctx = openfang_types::context::RequestContext {
+            tenant_id: job.tenant_id.clone(),
+            user_id: job.created_by_user_id.clone(),
+            ..Default::default()
+        };
+
         match &job.action {
             CronAction::SystemEvent { text } => {
                 let payload_bytes = serde_json::to_vec(&serde_json::json!({
@@ -5865,7 +5906,9 @@ impl OpenFangKernel {
                 let kh: Arc<dyn KernelHandle> = self.clone();
                 match tokio::time::timeout(
                     timeout,
-                    self.send_message_with_handle(agent_id, message, Some(kh), None, None),
+                    self.send_message_with_handle_and_blocks(
+                        agent_id, message, Some(kh), None, None, None, ctx.clone(),
+                    ),
                 )
                 .await
                 {
@@ -5919,7 +5962,7 @@ impl OpenFangKernel {
                     }
                 };
 
-                match tokio::time::timeout(timeout, self.run_workflow(wf_id, wf_input)).await {
+                match tokio::time::timeout(timeout, self.run_workflow(wf_id, wf_input, openfang_types::context::RequestContext::default())).await {
                     Ok(Ok((_run_id, output))) => {
                         match cron_deliver_response(self, agent_id, &output, &delivery).await {
                             Ok(()) => {
@@ -6251,6 +6294,7 @@ impl KernelHandle for OpenFangKernel {
         &self,
         manifest_toml: &str,
         parent_id: Option<&str>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> Result<(String, String), String> {
         // Verify manifest integrity if a signed manifest hash is present
         let content_hash = openfang_types::manifest_signing::hash_manifest(manifest_toml);
@@ -6261,12 +6305,12 @@ impl KernelHandle for OpenFangKernel {
         let name = manifest.name.clone();
         let parent = parent_id.and_then(|pid| pid.parse::<AgentId>().ok());
         let id = self
-            .spawn_agent_with_parent(manifest, parent, None, &openfang_types::context::RequestContext::default())
+            .spawn_agent_with_parent(manifest, parent, None, ctx)
             .map_err(|e| format!("Spawn failed: {e}"))?;
         Ok((id.to_string(), name))
     }
 
-    async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String> {
+    async fn send_to_agent(&self, agent_id: &str, message: &str, ctx: &openfang_types::context::RequestContext) -> Result<String, String> {
         // Try UUID first, then fall back to name lookup
         let id: AgentId = match agent_id.parse() {
             Ok(id) => id,
@@ -6276,8 +6320,13 @@ impl KernelHandle for OpenFangKernel {
                 .map(|e| e.id)
                 .ok_or_else(|| format!("Agent not found: {agent_id}"))?,
         };
+        let handle: Option<Arc<dyn kernel_handle::KernelHandle>> = self
+            .self_handle
+            .get()
+            .and_then(|w| w.upgrade())
+            .map(|arc| arc as Arc<dyn kernel_handle::KernelHandle>);
         let result = self
-            .send_message(id, message)
+            .send_message_with_handle_and_blocks(id, message, handle, None, None, None, ctx.clone())
             .await
             .map_err(|e| format!("Send failed: {e}"))?;
         Ok(result.response)
@@ -6485,6 +6534,8 @@ impl KernelHandle for OpenFangKernel {
             created_at: chrono::Utc::now(),
             next_run: None,
             last_run: None,
+            tenant_id: None,
+            created_by_user_id: None,
         };
 
         let id = self
@@ -6905,6 +6956,7 @@ impl KernelHandle for OpenFangKernel {
         manifest_toml: &str,
         parent_id: Option<&str>,
         parent_caps: &[openfang_types::capability::Capability],
+        ctx: &openfang_types::context::RequestContext,
     ) -> Result<(String, String), String> {
         // Parse the child manifest to extract its capabilities
         let child_manifest: AgentManifest =
@@ -6922,7 +6974,7 @@ impl KernelHandle for OpenFangKernel {
         );
 
         // Delegate to the normal spawn path (use trait method via KernelHandle::)
-        KernelHandle::spawn_agent(self, manifest_toml, parent_id).await
+        KernelHandle::spawn_agent(self, manifest_toml, parent_id, ctx).await
     }
 }
 
@@ -6941,6 +6993,7 @@ impl openfang_wire::peer::PeerHandle for OpenFangKernel {
                 tags: entry.manifest.tags.clone(),
                 tools: entry.manifest.capabilities.tools.clone(),
                 state: format!("{:?}", entry.state),
+                tenant_id: None,
             })
             .collect()
     }
@@ -6991,6 +7044,7 @@ impl openfang_wire::peer::PeerHandle for OpenFangKernel {
                 tags: entry.manifest.tags.clone(),
                 tools: entry.manifest.capabilities.tools.clone(),
                 state: format!("{:?}", entry.state),
+                tenant_id: None,
             })
             .collect()
     }

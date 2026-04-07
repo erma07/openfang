@@ -975,7 +975,7 @@ pub async fn run_workflow(
 
     let input = req["input"].as_str().unwrap_or("").to_string();
 
-    match state.kernel.run_workflow(workflow_id, input).await {
+    match state.kernel.run_workflow(workflow_id, input, openfang_types::context::RequestContext::default()).await {
         Ok((run_id, output)) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -6749,7 +6749,9 @@ pub async fn a2a_send_external(
     let session_id = body["session_id"].as_str();
 
     let client = openfang_runtime::a2a::A2aClient::new();
-    match client.send_task(&url, &message, session_id).await {
+    // TODO: extract RequestContext from HTTP headers/session once auth is wired
+    let ctx = openfang_types::context::RequestContext::default();
+    match client.send_task(&url, &message, session_id, &ctx).await {
         Ok(task) => (
             StatusCode::OK,
             Json(serde_json::to_value(&task).unwrap_or_default()),
@@ -10492,12 +10494,21 @@ pub async fn webhook_wake(
         );
     }
 
+    // Build request context from webhook payload
+    let _ctx = openfang_types::context::RequestContext {
+        tenant_id: body.tenant_id.clone(),
+        user_id: body.user_id.clone(),
+        ..Default::default()
+    };
+
     // Publish through the kernel's publish_event (KernelHandle trait), which
     // goes through the full event processing pipeline including trigger evaluation.
     let event_payload = serde_json::json!({
         "source": "webhook",
         "mode": body.mode,
         "text": body.text,
+        "tenant_id": body.tenant_id,
+        "user_id": body.user_id,
     });
     if let Err(e) =
         KernelHandle::publish_event(state.kernel.as_ref(), "webhook.wake", event_payload).await
@@ -10584,8 +10595,24 @@ pub async fn webhook_agent(
         }
     };
 
+    // Build request context from webhook payload
+    let ctx = openfang_types::context::RequestContext {
+        tenant_id: body.tenant_id.clone(),
+        user_id: body.user_id.clone(),
+        ..Default::default()
+    };
+
     // Actually send the message to the agent and get the response
-    match state.kernel.send_message(agent_id, &body.message).await {
+    let kh: Option<std::sync::Arc<dyn openfang_runtime::kernel_handle::KernelHandle>> = None;
+    match state.kernel.send_message_with_handle_and_blocks(
+        agent_id,
+        &body.message,
+        kh,
+        None,
+        ctx.user_id.clone(),
+        None,
+        ctx,
+    ).await {
         Ok(result) => (
             StatusCode::OK,
             Json(serde_json::json!({

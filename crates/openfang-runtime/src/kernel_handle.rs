@@ -32,10 +32,11 @@ pub trait KernelHandle: Send + Sync {
         &self,
         manifest_toml: &str,
         parent_id: Option<&str>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> Result<(String, String), String>;
 
     /// Send a message to another agent and get the response.
-    async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String>;
+    async fn send_to_agent(&self, agent_id: &str, message: &str, ctx: &openfang_types::context::RequestContext) -> Result<String, String>;
 
     /// List all running agents.
     fn list_agents(&self) -> Vec<AgentInfo>;
@@ -255,10 +256,11 @@ pub trait KernelHandle: Send + Sync {
         manifest_toml: &str,
         parent_id: Option<&str>,
         parent_caps: &[openfang_types::capability::Capability],
+        ctx: &openfang_types::context::RequestContext,
     ) -> Result<(String, String), String> {
         // Default: delegate to spawn_agent (no enforcement)
         // The kernel MUST override this with real enforcement
         let _ = parent_caps;
-        self.spawn_agent(manifest_toml, parent_id).await
+        self.spawn_agent(manifest_toml, parent_id, ctx).await
     }
 }

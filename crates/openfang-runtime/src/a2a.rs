@@ -437,11 +437,15 @@ impl A2aClient {
     }
 
     /// Send a task to an external A2A agent.
+    ///
+    /// The `ctx` parameter carries tenant/user/group scoping so the remote
+    /// agent can enforce multi-tenant isolation.
     pub async fn send_task(
         &self,
         url: &str,
         message: &str,
         session_id: Option<&str>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> Result<A2aTask, String> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -453,6 +457,11 @@ impl A2aClient {
                     "parts": [{"type": "text", "text": message}]
                 },
                 "sessionId": session_id,
+                "metadata": {
+                    "tenantId": ctx.tenant_id,
+                    "userId": ctx.user_id,
+                    "groupId": ctx.group_id,
+                },
             }
         });
 

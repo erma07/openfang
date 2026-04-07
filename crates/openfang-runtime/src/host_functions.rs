@@ -461,7 +461,7 @@ fn host_agent_send(state: &GuestState, params: &serde_json::Value) -> serde_json
     };
     match state
         .tokio_handle
-        .block_on(kernel.send_to_agent(target, message))
+        .block_on(kernel.send_to_agent(target, message, &openfang_types::context::RequestContext::default()))
     {
         Ok(response) => json!({"ok": response}),
         Err(e) => json!({"error": e}),
@@ -485,6 +485,7 @@ fn host_agent_spawn(state: &GuestState, params: &serde_json::Value) -> serde_jso
         manifest_toml,
         Some(&state.agent_id),
         &state.capabilities,
+        &openfang_types::context::RequestContext::default(),
     )) {
         Ok((id, name)) => json!({"ok": {"id": id, "name": name}}),
         Err(e) => json!({"error": e}),

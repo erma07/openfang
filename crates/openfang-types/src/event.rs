@@ -297,6 +297,15 @@ pub struct Event {
     /// Time-to-live: event expires after this duration.
     #[serde(with = "duration_ms")]
     pub ttl: Option<Duration>,
+    /// Tenant ID for multi-tenant scoping.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    /// User ID of the originator.
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Group/channel ID for shared conversations.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 impl Event {
@@ -310,7 +319,18 @@ impl Event {
             timestamp: Utc::now(),
             correlation_id: None,
             ttl: None,
+            tenant_id: None,
+            user_id: None,
+            group_id: None,
         }
+    }
+
+    /// Attach request context identity fields to this event.
+    pub fn with_ctx(mut self, ctx: &crate::context::RequestContext) -> Self {
+        self.tenant_id = ctx.tenant_id.clone();
+        self.user_id = ctx.user_id.clone();
+        self.group_id = ctx.group_id.clone();
+        self
     }
 
     /// Set the correlation ID for request-response linking.

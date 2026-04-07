@@ -160,10 +160,14 @@ impl McpConnection {
     /// Call a tool on the MCP server.
     ///
     /// `name` should be the namespaced name (mcp_{server}_{tool}).
+    /// `ctx` carries request-scoped identity (tenant, user, group) which is
+    /// injected into the tool arguments under `_openfang_*` keys so MCP
+    /// servers can perform tenant-aware operations.
     pub async fn call_tool(
         &mut self,
         name: &str,
         arguments: &serde_json::Value,
+        ctx: &openfang_types::context::RequestContext,
     ) -> Result<String, String> {
         // Look up the original tool name from the server (preserves hyphens etc.)
         let raw_name: String = self
@@ -173,7 +177,18 @@ impl McpConnection {
             .or_else(|| strip_mcp_prefix(&self.config.name, name).map(|s| s.to_string()))
             .unwrap_or_else(|| name.to_string());
 
-        let args = arguments.as_object().cloned().unwrap_or_default();
+        let mut args = arguments.as_object().cloned().unwrap_or_default();
+
+        // Inject request context as metadata (prefixed to avoid collision)
+        if let Some(ref t) = ctx.tenant_id {
+            args.insert("_openfang_tenant_id".to_string(), serde_json::Value::String(t.clone()));
+        }
+        if let Some(ref u) = ctx.user_id {
+            args.insert("_openfang_user_id".to_string(), serde_json::Value::String(u.clone()));
+        }
+        if let Some(ref g) = ctx.group_id {
+            args.insert("_openfang_group_id".to_string(), serde_json::Value::String(g.clone()));
+        }
 
         debug!(tool = %raw_name, server = %self.config.name, "MCP tool call");
 

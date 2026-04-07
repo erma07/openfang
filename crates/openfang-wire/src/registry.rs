@@ -235,6 +235,7 @@ mod tests {
             tags: tags.iter().map(|s| s.to_string()).collect(),
             tools: vec![],
             state: "running".to_string(),
+            tenant_id: None,
         }
     }
 

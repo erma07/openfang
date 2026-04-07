@@ -441,6 +441,10 @@ impl PeerNode {
                 agent: agent.to_string(),
                 message: message.to_string(),
                 sender: sender.map(|s| s.to_string()),
+                // TODO: propagate RequestContext from caller
+                tenant_id: None,
+                user_id: None,
+                group_id: None,
             }),
         };
         write_message_authenticated(&mut writer, &msg, &session_key).await?;
@@ -668,15 +672,26 @@ async fn handle_request(
             agent,
             message,
             sender,
-        }) => match handle
-            .handle_agent_message(agent, message, sender.as_deref())
-            .await
-        {
-            Ok(text) => WireMessageKind::Response(WireResponse::AgentResponse { text }),
-            Err(e) => WireMessageKind::Response(WireResponse::Error {
-                code: 500,
-                message: e,
-            }),
+            tenant_id,
+            user_id,
+            group_id,
+        }) => {
+            // Reconstruct RequestContext from wire fields
+            let _ctx = openfang_types::context::RequestContext {
+                tenant_id: tenant_id.clone(),
+                user_id: user_id.clone(),
+                group_id: group_id.clone(),
+            };
+            match handle
+                .handle_agent_message(agent, message, sender.as_deref())
+                .await
+            {
+                Ok(text) => WireMessageKind::Response(WireResponse::AgentResponse { text }),
+                Err(e) => WireMessageKind::Response(WireResponse::Error {
+                    code: 500,
+                    message: e,
+                }),
+            }
         },
         WireMessageKind::Request(WireRequest::Handshake { .. }) => {
             // Shouldn't get a second handshake in the message loop
@@ -760,15 +775,26 @@ async fn handle_request_in_loop(msg: &WireMessage, handle: &dyn PeerHandle) -> W
             agent,
             message,
             sender,
-        }) => match handle
-            .handle_agent_message(agent, message, sender.as_deref())
-            .await
-        {
-            Ok(text) => WireMessageKind::Response(WireResponse::AgentResponse { text }),
-            Err(e) => WireMessageKind::Response(WireResponse::Error {
-                code: 500,
-                message: e,
-            }),
+            tenant_id,
+            user_id,
+            group_id,
+        }) => {
+            // Reconstruct RequestContext from wire fields
+            let _ctx = openfang_types::context::RequestContext {
+                tenant_id: tenant_id.clone(),
+                user_id: user_id.clone(),
+                group_id: group_id.clone(),
+            };
+            match handle
+                .handle_agent_message(agent, message, sender.as_deref())
+                .await
+            {
+                Ok(text) => WireMessageKind::Response(WireResponse::AgentResponse { text }),
+                Err(e) => WireMessageKind::Response(WireResponse::Error {
+                    code: 500,
+                    message: e,
+                }),
+            }
         },
         _ => WireMessageKind::Response(WireResponse::Error {
             code: 400,
@@ -988,6 +1014,7 @@ mod tests {
                     tags: vec!["test".to_string()],
                     tools: vec![],
                     state: "running".to_string(),
+                    tenant_id: None,
                 }],
                 uptime: AtomicU64::new(42),
             }
@@ -1096,6 +1123,9 @@ mod tests {
                 agent: "echo".to_string(),
                 message: "Hello, world!".to_string(),
                 sender: Some("client".to_string()),
+                tenant_id: None,
+                user_id: None,
+                group_id: None,
             }),
         };
         write_message(&mut writer, &msg).await.unwrap();
