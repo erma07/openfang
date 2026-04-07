@@ -240,12 +240,14 @@ fn parse_messenger_entry(entry: &serde_json::Value) -> Vec<ChannelMessage> {
             sender: ChannelUser {
                 platform_id: sender_id,
                 display_name: String::new(), // Messenger doesn't include name in webhook
+                user_id: None,
                 openfang_user: None,
             },
             content,
             target_agent: None,
             timestamp: Utc::now(),
             is_group: false, // Messenger Bot API is always 1:1
+            group_id: None,
             thread_id: None,
             metadata,
         });

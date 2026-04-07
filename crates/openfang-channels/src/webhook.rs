@@ -252,12 +252,14 @@ impl ChannelAdapter for WebhookAdapter {
                                     sender: ChannelUser {
                                         platform_id: sender_id,
                                         display_name: sender_name,
+                                        user_id: None,
                                         openfang_user: None,
                                     },
                                     content,
                                     target_agent: None,
                                     timestamp: Utc::now(),
                                     is_group,
+                                    group_id: None,
                                     thread_id,
                                     metadata,
                                 };

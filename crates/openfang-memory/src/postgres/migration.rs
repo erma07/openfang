@@ -12,7 +12,7 @@ use deadpool_postgres::Pool;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 
 /// Current schema version.
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 11;
 
 /// Run all migrations to bring the database up to date.
 pub async fn run_migrations(pool: &Pool) -> OpenFangResult<()> {
@@ -81,6 +81,13 @@ pub async fn run_migrations(pool: &Pool) -> OpenFangResult<()> {
     }
     if current_version < 9 {
         migrate_v9(&client).await?;
+    }
+    if current_version < 10 {
+        migrate_v10(&client).await?;
+    }
+
+    if current_version < 11 {
+        migrate_v11(&client).await?;
     }
 
     // Update version
@@ -397,5 +404,57 @@ async fn migrate_v9(client: &PgClient) -> OpenFangResult<()> {
         )
         .await
         .map_err(|e| OpenFangError::Memory(format!("PG migration v9 failed: {e}")))?;
+    Ok(())
+}
+
+/// Version 10: Add tenant/user/group scoping columns for multi-tenancy.
+async fn migrate_v10(client: &PgClient) -> OpenFangResult<()> {
+    client.batch_execute(
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
+         ALTER TABLE sessions ADD COLUMN IF NOT EXISTS group_id TEXT;
+         ALTER TABLE memories ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT;
+         ALTER TABLE memories ADD COLUMN IF NOT EXISTS group_id TEXT;
+         ALTER TABLE canonical_sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         ALTER TABLE canonical_sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
+         ALTER TABLE canonical_sessions ADD COLUMN IF NOT EXISTS group_id TEXT;
+         ALTER TABLE agents ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+         ALTER TABLE entities ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         ALTER TABLE entities ADD COLUMN IF NOT EXISTS user_id TEXT;
+         ALTER TABLE entities ADD COLUMN IF NOT EXISTS group_id TEXT;
+         ALTER TABLE relations ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         ALTER TABLE relations ADD COLUMN IF NOT EXISTS user_id TEXT;
+         ALTER TABLE relations ADD COLUMN IF NOT EXISTS group_id TEXT;
+         ALTER TABLE audit_entries ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         ALTER TABLE audit_entries ADD COLUMN IF NOT EXISTS user_id TEXT;
+         CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+         CREATE INDEX IF NOT EXISTS idx_sessions_group ON sessions(group_id);
+         CREATE INDEX IF NOT EXISTS idx_memories_tenant ON memories(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+         CREATE INDEX IF NOT EXISTS idx_memories_group ON memories(group_id);
+         CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_entities_tenant ON entities(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_relations_tenant ON relations(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_entries(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_audit_user_id ON audit_entries(user_id);
+         INSERT INTO migrations (version, applied_at, description)
+         VALUES (10, NOW(), 'Add tenant/user/group scoping columns')
+         ON CONFLICT (version) DO NOTHING;",
+    ).await.map_err(|e| OpenFangError::Memory(format!("PG migration v10 failed: {e}")))?;
+    Ok(())
+}
+
+/// Version 11: Add tenant_id column to usage_events for per-tenant budget enforcement.
+async fn migrate_v11(client: &PgClient) -> OpenFangResult<()> {
+    client.batch_execute(
+        "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+         CREATE INDEX IF NOT EXISTS idx_usage_tenant_time ON usage_events(tenant_id, timestamp);
+         INSERT INTO migrations (version, applied_at, description)
+         VALUES (11, NOW(), 'Add tenant_id to usage_events for per-tenant budgets')
+         ON CONFLICT (version) DO NOTHING;",
+    ).await.map_err(|e| OpenFangError::Memory(format!("PG migration v11 failed: {e}")))?;
     Ok(())
 }

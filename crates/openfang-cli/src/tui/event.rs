@@ -303,7 +303,7 @@ pub fn spawn_inprocess_stream(
         // send_message_streaming() finds the reactor.
         let _guard = rt.enter();
 
-        match kernel.send_message_streaming(agent_id, &message, None, None, None, None) {
+        match kernel.send_message_streaming(agent_id, &message, None, None, None, None, openfang_types::context::RequestContext::default()) {
             Ok((mut rx, handle)) => {
                 rt.block_on(async {
                     while let Some(ev) = rx.recv().await {
@@ -978,7 +978,7 @@ pub fn spawn_kill_agent(backend: BackendRef, agent_id: String, tx: mpsc::Sender<
             // Try to parse as UUID-based AgentId
             if let Ok(uuid) = uuid::Uuid::parse_str(&agent_id) {
                 let aid = AgentId(uuid);
-                match kernel.kill_agent(aid) {
+                match kernel.kill_agent(aid, &openfang_types::context::RequestContext::default()) {
                     Ok(()) => {
                         let _ = tx.send(AppEvent::AgentKilled { id: agent_id });
                     }
@@ -1157,7 +1157,7 @@ pub fn spawn_update_agent_skills(
         BackendRef::InProcess(kernel) => {
             if let Ok(uuid) = uuid::Uuid::parse_str(&agent_id) {
                 let aid = openfang_types::agent::AgentId(uuid);
-                match kernel.set_agent_skills(aid, skills) {
+                match kernel.set_agent_skills(aid, skills, &openfang_types::context::RequestContext::default()) {
                     Ok(()) => {
                         let _ = tx.send(AppEvent::AgentSkillsUpdated(agent_id));
                     }
@@ -1201,7 +1201,7 @@ pub fn spawn_update_agent_mcp_servers(
         BackendRef::InProcess(kernel) => {
             if let Ok(uuid) = uuid::Uuid::parse_str(&agent_id) {
                 let aid = openfang_types::agent::AgentId(uuid);
-                match kernel.set_agent_mcp_servers(aid, servers) {
+                match kernel.set_agent_mcp_servers(aid, servers, &openfang_types::context::RequestContext::default()) {
                     Ok(()) => {
                         let _ = tx.send(AppEvent::AgentMcpServersUpdated(agent_id));
                     }

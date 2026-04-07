@@ -643,12 +643,14 @@ async fn parse_discord_message(
         sender: ChannelUser {
             platform_id: channel_id.to_string(),
             display_name,
+            user_id: Some(author_id.to_string()),
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp,
         is_group,
+        group_id: d["guild_id"].as_str().map(String::from),
         thread_id: None,
         metadata,
     })

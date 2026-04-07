@@ -34,7 +34,7 @@ impl SessionBackend for PgSessionStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             let row = client
                 .query_opt(
-                    "SELECT id, agent_id, messages, context_window_tokens, label FROM sessions WHERE id = $1",
+                    "SELECT id, agent_id, messages, context_window_tokens, label, tenant_id, user_id, group_id FROM sessions WHERE id = $1",
                     &[&id.0.to_string()],
                 )
                 .await
@@ -46,9 +46,12 @@ impl SessionBackend for PgSessionStore {
                     let messages_blob: Vec<u8> = row.get(2);
                     let tokens: i64 = row.get(3);
                     let label: Option<String> = row.get(4);
+                    let tenant_id: Option<String> = row.get(5);
+                    let user_id: Option<String> = row.get(6);
+                    let group_id: Option<String> = row.get(7);
                     let agent_id = helpers::parse_agent_id(&agent_str)?;
                     let messages: Vec<Message> = helpers::deserialize_messages_lossy(&messages_blob);
-                    Ok(Some(Session { id, agent_id, messages, context_window_tokens: tokens as u64, label }))
+                    Ok(Some(Session { id, agent_id, ctx: openfang_types::context::RequestContext::new(tenant_id, user_id, group_id), messages, context_window_tokens: tokens as u64, label }))
                 }
                 None => Ok(None),
             }
@@ -64,15 +67,18 @@ impl SessionBackend for PgSessionStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             client
                 .execute(
-                    "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-                     ON CONFLICT (id) DO UPDATE SET messages = $3, context_window_tokens = $4, label = $5, updated_at = NOW()",
+                    "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, tenant_id, user_id, group_id, created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+                     ON CONFLICT (id) DO UPDATE SET messages = $3, context_window_tokens = $4, label = $5, tenant_id = $6, user_id = $7, group_id = $8, updated_at = NOW()",
                     &[
                         &session.id.0.to_string(),
                         &session.agent_id.0.to_string(),
                         &messages_blob,
                         &(session.context_window_tokens as i64),
                         &session.label,
+                        &session.ctx.tenant_id,
+                        &session.ctx.user_id,
+                        &session.ctx.group_id,
                     ],
                 )
                 .await
@@ -157,7 +163,7 @@ impl SessionBackend for PgSessionStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             let row = client
                 .query_opt(
-                    "SELECT id, messages, context_window_tokens, label FROM sessions WHERE agent_id = $1 AND label = $2",
+                    "SELECT id, messages, context_window_tokens, label, tenant_id, user_id, group_id FROM sessions WHERE agent_id = $1 AND label = $2",
                     &[&agent_id.0.to_string(), &label],
                 )
                 .await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -167,9 +173,12 @@ impl SessionBackend for PgSessionStore {
                     let messages_blob: Vec<u8> = row.get(1);
                     let tokens: i64 = row.get(2);
                     let label: Option<String> = row.get(3);
+                    let tenant_id: Option<String> = row.get(4);
+                    let user_id: Option<String> = row.get(5);
+                    let group_id: Option<String> = row.get(6);
                     let id = helpers::parse_session_id(&id_str)?;
                     let messages: Vec<Message> = helpers::deserialize_messages_lossy(&messages_blob);
-                    Ok(Some(Session { id, agent_id, messages, context_window_tokens: tokens as u64, label }))
+                    Ok(Some(Session { id, agent_id, ctx: openfang_types::context::RequestContext::new(tenant_id, user_id, group_id), messages, context_window_tokens: tokens as u64, label }))
                 }
                 None => Ok(None),
             }
@@ -192,7 +201,7 @@ impl SessionBackend for PgSessionStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             let row = client
                 .query_opt(
-                    "SELECT messages, compaction_cursor, compacted_summary, updated_at FROM canonical_sessions WHERE agent_id = $1",
+                    "SELECT messages, compaction_cursor, compacted_summary, updated_at, tenant_id, user_id, group_id FROM canonical_sessions WHERE agent_id = $1",
                     &[&agent_id.0.to_string()],
                 )
                 .await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -202,9 +211,12 @@ impl SessionBackend for PgSessionStore {
                     let cursor: i32 = row.get(1);
                     let summary: Option<String> = row.get(2);
                     let updated_at: chrono::DateTime<chrono::Utc> = row.get(3);
+                    let tenant_id: Option<String> = row.get(4);
+                    let user_id: Option<String> = row.get(5);
+                    let group_id: Option<String> = row.get(6);
                     let messages: Vec<Message> = helpers::deserialize_messages_lossy(&messages_blob);
                     Ok(CanonicalSession {
-                        agent_id, messages, compaction_cursor: cursor as usize,
+                        agent_id, ctx: openfang_types::context::RequestContext::new(tenant_id, user_id, group_id), messages, compaction_cursor: cursor as usize,
                         compacted_summary: summary, updated_at: updated_at.to_rfc3339(),
                     })
                 }
@@ -216,7 +228,8 @@ impl SessionBackend for PgSessionStore {
                         &[&agent_id.0.to_string(), &empty],
                     ).await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
                     Ok(CanonicalSession {
-                        agent_id, messages: vec![], compaction_cursor: 0,
+                        agent_id, ctx: openfang_types::context::RequestContext::default(),
+                        messages: vec![], compaction_cursor: 0,
                         compacted_summary: None, updated_at: chrono::Utc::now().to_rfc3339(),
                     })
                 }
@@ -229,14 +242,17 @@ impl SessionBackend for PgSessionStore {
         let agent_id_str = canonical.agent_id.0.to_string();
         let cursor = canonical.compaction_cursor as i32;
         let summary = canonical.compacted_summary.clone();
+        let tenant_id = canonical.ctx.tenant_id.clone();
+        let user_id = canonical.ctx.user_id.clone();
+        let group_id = canonical.ctx.group_id.clone();
         self.block_on_pg(async {
             let client = self.pool.get().await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             client.execute(
-                "INSERT INTO canonical_sessions (agent_id, messages, compaction_cursor, compacted_summary, updated_at)
-                 VALUES ($1, $2, $3, $4, NOW())
-                 ON CONFLICT (agent_id) DO UPDATE SET messages = $2, compaction_cursor = $3, compacted_summary = $4, updated_at = NOW()",
-                &[&agent_id_str, &messages_blob, &cursor, &summary],
+                "INSERT INTO canonical_sessions (agent_id, messages, compaction_cursor, compacted_summary, updated_at, tenant_id, user_id, group_id)
+                 VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7)
+                 ON CONFLICT (agent_id) DO UPDATE SET messages = $2, compaction_cursor = $3, compacted_summary = $4, updated_at = NOW(), tenant_id = $5, user_id = $6, group_id = $7",
+                &[&agent_id_str, &messages_blob, &cursor, &summary, &tenant_id, &user_id, &group_id],
             ).await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
             Ok(())
         })

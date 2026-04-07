@@ -317,8 +317,8 @@ impl MemorySubstrate {
     }
 
     /// Create a new empty session for an agent.
-    pub fn create_session(&self, agent_id: AgentId) -> OpenFangResult<Session> {
-        self.sessions.create_session(agent_id)
+    pub fn create_session(&self, agent_id: AgentId, ctx: &openfang_types::context::RequestContext) -> OpenFangResult<Session> {
+        self.sessions.create_session(agent_id, ctx)
     }
 
     /// List all sessions with metadata.
@@ -369,8 +369,9 @@ impl MemorySubstrate {
         &self,
         agent_id: AgentId,
         label: Option<&str>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<Session> {
-        self.sessions.create_session_with_label(agent_id, label)
+        self.sessions.create_session_with_label(agent_id, label, ctx)
     }
 
     /// Load canonical session context for cross-channel memory.
@@ -453,8 +454,9 @@ impl MemorySubstrate {
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
     ) -> OpenFangResult<MemoryId> {
+        let ctx = openfang_types::context::RequestContext::default();
         self.semantic
-            .remember(agent_id, content, source, scope, metadata, embedding)
+            .remember(agent_id, content, source, scope, metadata, embedding, &ctx)
     }
 
     /// Recall memories using vector similarity when a query embedding is provided.
@@ -507,6 +509,7 @@ impl MemorySubstrate {
         let scope = scope.to_string();
         let embedding_owned = embedding.map(|e| e.to_vec());
         tokio::task::spawn_blocking(move || {
+            let ctx = openfang_types::context::RequestContext::default();
             store.remember(
                 agent_id,
                 &content,
@@ -514,6 +517,7 @@ impl MemorySubstrate {
                 &scope,
                 metadata,
                 embedding_owned.as_deref(),
+                &ctx,
             )
         })
         .await
@@ -629,6 +633,7 @@ impl Memory for MemorySubstrate {
         source: MemorySource,
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<MemoryId> {
         // Auto-embed if driver is available
         let embedding = if let Some(ref driver) = self.embedding_driver {
@@ -646,6 +651,7 @@ impl Memory for MemorySubstrate {
         let store = Arc::clone(&self.semantic);
         let content = content.to_string();
         let scope = scope.to_string();
+        let ctx = ctx.clone();
         tokio::task::spawn_blocking(move || {
             store.remember(
                 agent_id,
@@ -654,6 +660,7 @@ impl Memory for MemorySubstrate {
                 &scope,
                 metadata,
                 embedding.as_deref(),
+                &ctx,
             )
         })
         .await
@@ -697,21 +704,47 @@ impl Memory for MemorySubstrate {
 
     async fn add_entity(&self, entity: Entity) -> OpenFangResult<String> {
         let store = Arc::clone(&self.knowledge);
-        tokio::task::spawn_blocking(move || store.add_entity(entity))
+        tokio::task::spawn_blocking(move || {
+            // BUG FIX: The Memory trait doesn't pass ctx, but the KnowledgeBackend
+            // uses the ctx parameter for SQL scoping (tenant_id, user_id, group_id).
+            // Extract ctx from the entity itself so scoping columns are populated
+            // correctly. Previously this used RequestContext::default(), causing
+            // all scoping columns to be None.
+            let ctx = entity.ctx.clone();
+            store.add_entity(entity, &ctx)
+        })
             .await
             .map_err(|e| OpenFangError::Internal(e.to_string()))?
     }
 
     async fn add_relation(&self, relation: Relation) -> OpenFangResult<String> {
         let store = Arc::clone(&self.knowledge);
-        tokio::task::spawn_blocking(move || store.add_relation(relation))
+        tokio::task::spawn_blocking(move || {
+            // BUG FIX: Extract ctx from the relation so the backend receives
+            // correct tenant_id/user_id/group_id for SQL scoping. See add_entity
+            // comment for details.
+            let ctx = relation.ctx.clone();
+            store.add_relation(relation, &ctx)
+        })
             .await
             .map_err(|e| OpenFangError::Internal(e.to_string()))?
     }
 
     async fn query_graph(&self, pattern: GraphPattern) -> OpenFangResult<Vec<GraphMatch>> {
         let store = Arc::clone(&self.knowledge);
-        tokio::task::spawn_blocking(move || store.query_graph(pattern))
+        tokio::task::spawn_blocking(move || {
+            // NOTE: GraphPattern doesn't carry a full RequestContext, but it does
+            // have tenant_id for filtering. The backend's query_graph reads
+            // ctx.tenant_id for SQL WHERE clauses. Construct a minimal ctx from
+            // the pattern's tenant_id so tenant-scoped queries work correctly.
+            // Previously this used RequestContext::default(), causing tenant
+            // filtering to be skipped.
+            let ctx = openfang_types::context::RequestContext {
+                tenant_id: pattern.tenant_id.clone(),
+                ..Default::default()
+            };
+            store.query_graph(pattern, &ctx)
+        })
             .await
             .map_err(|e| OpenFangError::Internal(e.to_string()))?
     }
@@ -773,6 +806,7 @@ mod tests {
                 MemorySource::Conversation,
                 "episodic",
                 HashMap::new(),
+                &openfang_types::context::RequestContext::default(),
             )
             .await
             .unwrap();

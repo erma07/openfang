@@ -250,12 +250,14 @@ fn parse_mastodon_notification(
         sender: ChannelUser {
             platform_id: account_id.to_string(),
             display_name,
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group: false, // Mentions are treated as DM-like interactions
+        group_id: None,
         thread_id: in_reply_to,
         metadata,
     })

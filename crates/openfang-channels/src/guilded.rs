@@ -278,12 +278,14 @@ impl ChannelAdapter for GuildedAdapter {
                         sender: ChannelUser {
                             platform_id: channel_id,
                             display_name: created_by.to_string(),
+                            user_id: None,
                             openfang_user: None,
                         },
                         content: msg_content,
                         target_agent: None,
                         timestamp: Utc::now(),
                         is_group: true,
+                        group_id: None,
                         thread_id: None,
                         metadata: {
                             let mut m = HashMap::new();

@@ -55,9 +55,12 @@ pub struct AuditEntry {
     pub prev_hash: String,
     /// SHA-256 hash of this entry's content concatenated with `prev_hash`.
     pub hash: String,
+    /// Request context (tenant/user/group identity).
+    pub ctx: openfang_types::context::RequestContext,
 }
 
 /// Computes the SHA-256 hash for a single audit entry from its fields.
+#[allow(clippy::too_many_arguments)]
 fn compute_entry_hash(
     seq: u64,
     timestamp: &str,
@@ -66,6 +69,8 @@ fn compute_entry_hash(
     detail: &str,
     outcome: &str,
     prev_hash: &str,
+    tenant_id: Option<&str>,
+    user_id: Option<&str>,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(seq.to_string().as_bytes());
@@ -75,6 +80,8 @@ fn compute_entry_hash(
     hasher.update(detail.as_bytes());
     hasher.update(outcome.as_bytes());
     hasher.update(prev_hash.as_bytes());
+    hasher.update(tenant_id.unwrap_or("").as_bytes());
+    hasher.update(user_id.unwrap_or("").as_bytes());
     hex::encode(hasher.finalize())
 }
 
@@ -142,6 +149,9 @@ impl AuditLog {
                 let prev_hash = row["prev_hash"].as_str().unwrap_or("").to_string();
                 let hash = row["hash"].as_str().unwrap_or("").to_string();
 
+                let tenant_id = row["tenant_id"].as_str().map(|s| s.to_string());
+                let user_id = row["user_id"].as_str().map(|s| s.to_string());
+
                 tip = hash.clone();
                 entries.push(AuditEntry {
                     seq,
@@ -152,6 +162,11 @@ impl AuditLog {
                     outcome,
                     prev_hash,
                     hash,
+                    ctx: openfang_types::context::RequestContext {
+                        tenant_id,
+                        user_id,
+                        group_id: None,
+                    },
                 });
             }
         }
@@ -182,6 +197,7 @@ impl AuditLog {
     /// If a backend is available, the entry is also persisted.
     pub fn record(
         &self,
+        ctx: &openfang_types::context::RequestContext,
         agent_id: impl Into<String>,
         action: AuditAction,
         detail: impl Into<String>,
@@ -199,7 +215,15 @@ impl AuditLog {
         let prev_hash = tip.clone();
 
         let hash = compute_entry_hash(
-            seq, &timestamp, &agent_id, &action, &detail, &outcome, &prev_hash,
+            seq,
+            &timestamp,
+            &agent_id,
+            &action,
+            &detail,
+            &outcome,
+            &prev_hash,
+            ctx.tenant_id.as_deref(),
+            ctx.user_id.as_deref(),
         );
 
         let entry = AuditEntry {
@@ -211,11 +235,13 @@ impl AuditLog {
             outcome,
             prev_hash,
             hash: hash.clone(),
+            ctx: ctx.clone(),
         };
 
         // Persist to backend if available
         if let Some(ref db) = self.db {
             let _ = db.append_entry(
+                ctx,
                 &entry.agent_id,
                 &entry.action.to_string(),
                 &entry.detail,
@@ -252,6 +278,8 @@ impl AuditLog {
                 &entry.detail,
                 &entry.outcome,
                 &entry.prev_hash,
+                entry.ctx.tenant_id.as_deref(),
+                entry.ctx.user_id.as_deref(),
             );
 
             if recomputed != entry.hash {
@@ -304,18 +332,25 @@ impl Default for AuditLog {
 mod tests {
     use super::*;
 
+    fn default_ctx() -> openfang_types::context::RequestContext {
+        openfang_types::context::RequestContext::default()
+    }
+
     #[test]
     fn test_audit_chain_integrity() {
+        let ctx = default_ctx();
         let log = AuditLog::new();
         log.record(
+            &ctx,
             "agent-1",
             AuditAction::ToolInvoke,
             "read_file /etc/passwd",
             "ok",
         );
-        log.record("agent-1", AuditAction::ShellExec, "ls -la", "ok");
-        log.record("agent-2", AuditAction::AgentSpawn, "spawning helper", "ok");
+        log.record(&ctx, "agent-1", AuditAction::ShellExec, "ls -la", "ok");
+        log.record(&ctx, "agent-2", AuditAction::AgentSpawn, "spawning helper", "ok");
         log.record(
+            &ctx,
             "agent-1",
             AuditAction::NetworkAccess,
             "https://example.com",
@@ -335,10 +370,11 @@ mod tests {
 
     #[test]
     fn test_audit_tamper_detection() {
+        let ctx = default_ctx();
         let log = AuditLog::new();
-        log.record("agent-1", AuditAction::ToolInvoke, "read_file /tmp/a", "ok");
-        log.record("agent-1", AuditAction::ShellExec, "rm -rf /", "denied");
-        log.record("agent-1", AuditAction::MemoryAccess, "read key foo", "ok");
+        log.record(&ctx, "agent-1", AuditAction::ToolInvoke, "read_file /tmp/a", "ok");
+        log.record(&ctx, "agent-1", AuditAction::ShellExec, "rm -rf /", "denied");
+        log.record(&ctx, "agent-1", AuditAction::MemoryAccess, "read key foo", "ok");
 
         // Tamper with an entry
         {
@@ -353,16 +389,38 @@ mod tests {
 
     #[test]
     fn test_audit_tip_changes() {
+        let ctx = default_ctx();
         let log = AuditLog::new();
         let genesis_tip = log.tip_hash();
         assert_eq!(genesis_tip, "0".repeat(64));
 
-        let h1 = log.record("a", AuditAction::AgentSpawn, "spawn", "ok");
+        let h1 = log.record(&ctx, "a", AuditAction::AgentSpawn, "spawn", "ok");
         assert_eq!(log.tip_hash(), h1);
         assert_ne!(log.tip_hash(), genesis_tip);
 
-        let h2 = log.record("b", AuditAction::AgentKill, "kill", "ok");
+        let h2 = log.record(&ctx, "b", AuditAction::AgentKill, "kill", "ok");
         assert_eq!(log.tip_hash(), h2);
         assert_ne!(h2, h1);
+    }
+
+    #[test]
+    fn test_audit_captures_ctx() {
+        let log = AuditLog::new();
+        let ctx = openfang_types::context::RequestContext { tenant_id: Some("acme".into()), user_id: Some("alice".into()), ..Default::default() };
+        log.record(&ctx, "agent-1", AuditAction::ToolInvoke, "read_file", "ok");
+        let entries = log.recent(1);
+        assert_eq!(entries[0].ctx.tenant_id, Some("acme".to_string()));
+        assert_eq!(entries[0].ctx.user_id, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn test_audit_different_tenants_different_hashes() {
+        let log1 = AuditLog::new();
+        let log2 = AuditLog::new();
+        let ctx1 = openfang_types::context::RequestContext { tenant_id: Some("acme".into()), ..Default::default() };
+        let ctx2 = openfang_types::context::RequestContext { tenant_id: Some("startup".into()), ..Default::default() };
+        let h1 = log1.record(&ctx1, "a", AuditAction::AgentSpawn, "spawn", "ok");
+        let h2 = log2.record(&ctx2, "a", AuditAction::AgentSpawn, "spawn", "ok");
+        assert_ne!(h1, h2);
     }
 }

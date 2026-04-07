@@ -31,11 +31,17 @@ pub enum ChannelType {
 /// A user on a messaging platform.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelUser {
-    /// Platform-specific user ID.
+    /// Platform routing address (e.g., Telegram chat_id, Discord channel_id).
+    /// Used for message delivery. May be a channel/group ID, not always a person.
     pub platform_id: String,
     /// Human-readable display name.
     pub display_name: String,
-    /// Optional mapping to an OpenFang user identity.
+    /// Actual person's platform ID (e.g., Telegram user_id, Discord author_id).
+    /// Always identifies a person, unlike platform_id which may be a channel.
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Mapped OpenFang user identity (resolved via AuthManager.identify()).
+    /// Authoritative when set — takes precedence over platform user_id.
     pub openfang_user: Option<String>,
 }
 
@@ -90,6 +96,9 @@ pub struct ChannelMessage {
     /// Whether this message is from a group chat (vs DM).
     #[serde(default)]
     pub is_group: bool,
+    /// Group/channel ID for shared conversations (Discord channel, Telegram group, etc.)
+    #[serde(default)]
+    pub group_id: Option<String>,
     /// Thread ID for threaded conversations (platform-specific).
     #[serde(default)]
     pub thread_id: Option<String>,
@@ -322,12 +331,14 @@ mod tests {
             sender: ChannelUser {
                 platform_id: "user1".to_string(),
                 display_name: "Alice".to_string(),
+                user_id: None,
                 openfang_user: None,
             },
             content: ChannelContent::Text("Hello!".to_string()),
             target_agent: None,
             timestamp: Utc::now(),
             is_group: false,
+            group_id: None,
             thread_id: None,
             metadata: HashMap::new(),
         };

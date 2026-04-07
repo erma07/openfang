@@ -215,12 +215,14 @@ fn parse_mattermost_event(
         sender: ChannelUser {
             platform_id: channel_id.to_string(),
             display_name: sender_name.to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group,
+        group_id: None,
         thread_id,
         metadata: HashMap::new(),
     })

@@ -2115,7 +2115,7 @@ impl App {
                         }
                         Backend::InProcess { kernel } => {
                             if let Some(id) = target.agent_id_inprocess {
-                                match kernel.kill_agent(id) {
+                                match kernel.kill_agent(id, &openfang_types::context::RequestContext::default()) {
                                     Ok(()) => {
                                         self.chat.push_message(
                                             chat::Role::System,

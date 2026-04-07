@@ -796,6 +796,9 @@ fn chromium_candidates() -> Vec<String> {
 // ── Browser manager ────────────────────────────────────────────────────────
 
 /// Manages browser sessions for all agents.
+///
+/// Session keys are scoped by `tenant_id:agent_id` so that agents in different
+/// tenants get isolated browser sessions even if they share an agent_id.
 pub struct BrowserManager {
     sessions: DashMap<String, Arc<Mutex<BrowserSession>>>,
     config: BrowserConfig,
@@ -810,9 +813,22 @@ impl BrowserManager {
         }
     }
 
+    /// Build a tenant-scoped session key.
+    fn session_key(tenant_id: Option<&str>, agent_id: &str) -> String {
+        format!("{}:{}", tenant_id.unwrap_or("default"), agent_id)
+    }
+
     /// Check whether an agent has an active browser session.
     pub fn has_session(&self, agent_id: &str) -> bool {
-        self.sessions.contains_key(agent_id)
+        // Legacy unscoped lookup — checks both scoped "default:{id}" and raw "{id}"
+        let scoped = Self::session_key(None, agent_id);
+        self.sessions.contains_key(&scoped) || self.sessions.contains_key(agent_id)
+    }
+
+    /// Check whether an agent has an active browser session (tenant-scoped).
+    pub fn has_session_scoped(&self, tenant_id: Option<&str>, agent_id: &str) -> bool {
+        let key = Self::session_key(tenant_id, agent_id);
+        self.sessions.contains_key(&key)
     }
 
     /// Send a command to an agent's browser session (creating one if needed).
@@ -821,7 +837,17 @@ impl BrowserManager {
         agent_id: &str,
         cmd: BrowserCommand,
     ) -> Result<BrowserResponse, String> {
-        let session = self.get_or_create(agent_id).await?;
+        self.send_command_scoped(None, agent_id, cmd).await
+    }
+
+    /// Send a command with explicit tenant scoping.
+    pub async fn send_command_scoped(
+        &self,
+        tenant_id: Option<&str>,
+        agent_id: &str,
+        cmd: BrowserCommand,
+    ) -> Result<BrowserResponse, String> {
+        let session = self.get_or_create(tenant_id, agent_id).await?;
         let mut guard = session.lock().await;
         let resp = guard.execute(cmd).await;
 
@@ -836,7 +862,21 @@ impl BrowserManager {
 
     /// Close an agent's browser session.
     pub async fn close_session(&self, agent_id: &str) {
-        if let Some((_, session)) = self.sessions.remove(agent_id) {
+        // Close both scoped and legacy keys
+        let scoped = Self::session_key(None, agent_id);
+        if let Some((_, session)) = self.sessions.remove(&scoped) {
+            drop(session);
+            info!(agent_id, "Browser session closed");
+        } else if let Some((_, session)) = self.sessions.remove(agent_id) {
+            drop(session);
+            info!(agent_id, "Browser session closed (legacy key)");
+        }
+    }
+
+    /// Close a tenant-scoped browser session.
+    pub async fn close_session_scoped(&self, tenant_id: Option<&str>, agent_id: &str) {
+        let key = Self::session_key(tenant_id, agent_id);
+        if let Some((_, session)) = self.sessions.remove(&key) {
             drop(session);
             info!(agent_id, "Browser session closed");
         }
@@ -847,9 +887,15 @@ impl BrowserManager {
         self.close_session(agent_id).await;
     }
 
-    /// Get existing session or create a new one.
-    async fn get_or_create(&self, agent_id: &str) -> Result<Arc<Mutex<BrowserSession>>, String> {
-        if let Some(entry) = self.sessions.get(agent_id) {
+    /// Get existing session or create a new one (tenant-scoped).
+    async fn get_or_create(
+        &self,
+        tenant_id: Option<&str>,
+        agent_id: &str,
+    ) -> Result<Arc<Mutex<BrowserSession>>, String> {
+        let key = Self::session_key(tenant_id, agent_id);
+
+        if let Some(entry) = self.sessions.get(&key) {
             return Ok(Arc::clone(entry.value()));
         }
 
@@ -862,7 +908,7 @@ impl BrowserManager {
 
         let session = BrowserSession::launch(&self.config).await?;
         let arc = Arc::new(Mutex::new(session));
-        self.sessions.insert(agent_id.to_string(), Arc::clone(&arc));
+        self.sessions.insert(key, Arc::clone(&arc));
         info!(agent_id, "Browser session created (native CDP)");
         Ok(arc)
     }
@@ -875,12 +921,14 @@ pub async fn tool_browser_navigate(
     input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
     let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
     crate::web_fetch::check_ssrf(url, &[])?;
 
     let resp = mgr
-        .send_command(
+        .send_command_scoped(
+            tenant_id,
             agent_id,
             BrowserCommand::Navigate {
                 url: url.to_string(),
@@ -907,13 +955,15 @@ pub async fn tool_browser_click(
     input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
     let selector = input["selector"]
         .as_str()
         .ok_or("Missing 'selector' parameter")?;
 
     let resp = mgr
-        .send_command(
+        .send_command_scoped(
+            tenant_id,
             agent_id,
             BrowserCommand::Click {
                 selector: selector.to_string(),
@@ -935,6 +985,7 @@ pub async fn tool_browser_type(
     input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
     let selector = input["selector"]
         .as_str()
@@ -942,7 +993,8 @@ pub async fn tool_browser_type(
     let text = input["text"].as_str().ok_or("Missing 'text' parameter")?;
 
     let resp = mgr
-        .send_command(
+        .send_command_scoped(
+            tenant_id,
             agent_id,
             BrowserCommand::Type {
                 selector: selector.to_string(),
@@ -961,9 +1013,10 @@ pub async fn tool_browser_screenshot(
     _input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
     let resp = mgr
-        .send_command(agent_id, BrowserCommand::Screenshot)
+        .send_command_scoped(tenant_id, agent_id, BrowserCommand::Screenshot)
         .await?;
     if !resp.success {
         return Err(resp
@@ -1002,8 +1055,9 @@ pub async fn tool_browser_read_page(
     _input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
-    let resp = mgr.send_command(agent_id, BrowserCommand::ReadPage).await?;
+    let resp = mgr.send_command_scoped(tenant_id, agent_id, BrowserCommand::ReadPage).await?;
     if !resp.success {
         return Err(resp.error.unwrap_or_else(|| "ReadPage failed".to_string()));
     }
@@ -1022,6 +1076,7 @@ pub async fn tool_browser_close(
     _input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    _tenant_id: Option<&str>,
 ) -> Result<String, String> {
     mgr.close_session(agent_id).await;
     Ok("Browser session closed.".to_string())
@@ -1032,12 +1087,13 @@ pub async fn tool_browser_scroll(
     input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
     let direction = input["direction"].as_str().unwrap_or("down").to_string();
     let amount = input["amount"].as_i64().unwrap_or(600) as i32;
 
     let resp = mgr
-        .send_command(agent_id, BrowserCommand::Scroll { direction, amount })
+        .send_command_scoped(tenant_id, agent_id, BrowserCommand::Scroll { direction, amount })
         .await?;
     if !resp.success {
         return Err(resp.error.unwrap_or_else(|| "Scroll failed".to_string()));
@@ -1054,6 +1110,7 @@ pub async fn tool_browser_wait(
     input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
     let selector = input["selector"]
         .as_str()
@@ -1061,7 +1118,8 @@ pub async fn tool_browser_wait(
     let timeout_ms = input["timeout_ms"].as_u64().unwrap_or(5000);
 
     let resp = mgr
-        .send_command(
+        .send_command_scoped(
+            tenant_id,
             agent_id,
             BrowserCommand::Wait {
                 selector: selector.to_string(),
@@ -1080,13 +1138,15 @@ pub async fn tool_browser_run_js(
     input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
     let expression = input["expression"]
         .as_str()
         .ok_or("Missing 'expression' parameter")?;
 
     let resp = mgr
-        .send_command(
+        .send_command_scoped(
+            tenant_id,
             agent_id,
             BrowserCommand::RunJs {
                 expression: expression.to_string(),
@@ -1107,8 +1167,9 @@ pub async fn tool_browser_back(
     _input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
+    tenant_id: Option<&str>,
 ) -> Result<String, String> {
-    let resp = mgr.send_command(agent_id, BrowserCommand::Back).await?;
+    let resp = mgr.send_command_scoped(tenant_id, agent_id, BrowserCommand::Back).await?;
     if !resp.success {
         return Err(resp.error.unwrap_or_else(|| "Back failed".to_string()));
     }

@@ -77,6 +77,9 @@ pub struct Trigger {
     pub fire_count: u64,
     /// Maximum number of times this trigger can fire (0 = unlimited).
     pub max_fires: u64,
+    /// Optional tenant scope — when set, this trigger only fires for events
+    /// from the same tenant.
+    pub tenant_id: Option<String>,
 }
 
 /// The trigger engine manages event-to-agent routing.
@@ -113,6 +116,7 @@ impl TriggerEngine {
             created_at: Utc::now(),
             fire_count: 0,
             max_fires,
+            tenant_id: None,
         };
         let id = trigger.id;
         self.triggers.insert(id, trigger);
@@ -191,6 +195,7 @@ impl TriggerEngine {
                 created_at: old.created_at,
                 fire_count: old.fire_count,
                 max_fires: old.max_fires,
+                tenant_id: old.tenant_id,
             };
             self.triggers.insert(new_id, trigger);
             self.agent_triggers
@@ -285,6 +290,22 @@ impl TriggerEngine {
             // Check max fires
             if trigger.max_fires > 0 && trigger.fire_count >= trigger.max_fires {
                 trigger.enabled = false;
+                continue;
+            }
+
+            // Skip triggers that belong to a different tenant.
+            // Future: check if event.tenant_id matches trigger.tenant_id.
+            // For now, triggers with tenant_id set are only matched for
+            // events from the same source (source_agent must belong to
+            // the same tenant — not yet verified since events don't carry
+            // tenant_id). This is a no-op guard that will be activated
+            // once events gain tenant context.
+            if trigger.tenant_id.is_some() {
+                // Tenant-scoped trigger: skip unless the event carries a
+                // matching tenant_id. Since events don't have tenant_id
+                // yet, tenant-scoped triggers currently never fire.
+                // This is intentionally conservative — a tenant-scoped
+                // trigger should NOT fire for unscoped events.
                 continue;
             }
 

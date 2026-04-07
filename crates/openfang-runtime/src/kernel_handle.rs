@@ -44,10 +44,10 @@ pub trait KernelHandle: Send + Sync {
     fn kill_agent(&self, agent_id: &str) -> Result<(), String>;
 
     /// Store a value in shared memory (cross-agent accessible).
-    fn memory_store(&self, key: &str, value: serde_json::Value) -> Result<(), String>;
+    fn memory_store(&self, ctx: &openfang_types::context::RequestContext, key: &str, value: serde_json::Value) -> Result<(), String>;
 
     /// Recall a value from shared memory.
-    fn memory_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String>;
+    fn memory_recall(&self, ctx: &openfang_types::context::RequestContext, key: &str) -> Result<Option<serde_json::Value>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;
@@ -80,18 +80,21 @@ pub trait KernelHandle: Send + Sync {
     /// Add an entity to the knowledge graph.
     async fn knowledge_add_entity(
         &self,
+        ctx: &openfang_types::context::RequestContext,
         entity: openfang_types::memory::Entity,
     ) -> Result<String, String>;
 
     /// Add a relation to the knowledge graph.
     async fn knowledge_add_relation(
         &self,
+        ctx: &openfang_types::context::RequestContext,
         relation: openfang_types::memory::Relation,
     ) -> Result<String, String>;
 
     /// Query the knowledge graph with a pattern.
     async fn knowledge_query(
         &self,
+        ctx: &openfang_types::context::RequestContext,
         pattern: openfang_types::memory::GraphPattern,
     ) -> Result<Vec<openfang_types::memory::GraphMatch>, String>;
 

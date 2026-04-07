@@ -195,7 +195,7 @@ memory_write = ["self.*"]
 
     // Cleanup
     for id in agent_ids {
-        kernel.kill_agent(id).unwrap();
+        kernel.kill_agent(id, &openfang_types::context::RequestContext::default()).unwrap();
     }
     kernel.shutdown();
 }

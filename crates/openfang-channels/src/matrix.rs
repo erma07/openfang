@@ -434,12 +434,14 @@ impl ChannelAdapter for MatrixAdapter {
                                     sender: ChannelUser {
                                         platform_id: room_id.clone(),
                                         display_name: sender.to_string(),
+                                        user_id: None,
                                         openfang_user: None,
                                     },
                                     content: msg_content,
                                     target_agent: None,
                                     timestamp: Utc::now(),
                                     is_group,
+                                    group_id: None,
                                     thread_id: None,
                                     metadata,
                                 };

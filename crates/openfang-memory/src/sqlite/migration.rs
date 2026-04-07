@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 11;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -45,6 +45,14 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 9 {
         migrate_v9(conn)?;
+    }
+
+    if current_version < 10 {
+        migrate_v10(conn)?;
+    }
+
+    if current_version < 11 {
+        migrate_v11(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -369,6 +377,66 @@ fn migrate_v9(conn: &Connection) -> Result<(), rusqlite::Error> {
         "INSERT OR IGNORE INTO migrations (version, applied_at, description)
          VALUES (9, datetime('now'), 'Add sqlite-vec virtual table for indexed vector search')",
         [],
+    )?;
+    Ok(())
+}
+
+/// Version 10: Add tenant/user/group scoping columns for multi-tenancy.
+fn migrate_v10(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Add tenant/user/group scoping columns (all nullable for backward compat)
+    let columns = [
+        ("sessions", "tenant_id", "TEXT"),
+        ("sessions", "user_id", "TEXT"),
+        ("sessions", "group_id", "TEXT"),
+        ("memories", "tenant_id", "TEXT"),
+        ("memories", "user_id", "TEXT"),
+        ("memories", "group_id", "TEXT"),
+        ("canonical_sessions", "tenant_id", "TEXT"),
+        ("canonical_sessions", "user_id", "TEXT"),
+        ("canonical_sessions", "group_id", "TEXT"),
+        ("agents", "tenant_id", "TEXT"),
+        ("agents", "owner_user_id", "TEXT"),
+        ("entities", "tenant_id", "TEXT"),
+        ("entities", "user_id", "TEXT"),
+        ("entities", "group_id", "TEXT"),
+        ("relations", "tenant_id", "TEXT"),
+        ("relations", "user_id", "TEXT"),
+        ("relations", "group_id", "TEXT"),
+        ("audit_entries", "tenant_id", "TEXT"),
+        ("audit_entries", "user_id", "TEXT"),
+    ];
+    for (table, col, typedef) in &columns {
+        if !column_exists(conn, table, col) {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {typedef}"), [])?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+         CREATE INDEX IF NOT EXISTS idx_sessions_group ON sessions(group_id);
+         CREATE INDEX IF NOT EXISTS idx_memories_tenant ON memories(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+         CREATE INDEX IF NOT EXISTS idx_memories_group ON memories(group_id);
+         CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_entities_tenant ON entities(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_relations_tenant ON relations(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_entries(tenant_id);
+         CREATE INDEX IF NOT EXISTS idx_audit_user_id ON audit_entries(user_id);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (10, datetime('now'), 'Add tenant/user/group scoping columns');",
+    )?;
+    Ok(())
+}
+
+/// Version 11: Add tenant_id column to usage_events for per-tenant budget enforcement.
+fn migrate_v11(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "usage_events", "tenant_id") {
+        conn.execute("ALTER TABLE usage_events ADD COLUMN tenant_id TEXT", [])?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_usage_tenant_time ON usage_events(tenant_id, timestamp);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (11, datetime('now'), 'Add tenant_id to usage_events for per-tenant budgets');",
     )?;
     Ok(())
 }

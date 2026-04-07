@@ -79,7 +79,7 @@ memory_write = ["self.*"]
     );
 
     // Kill agent
-    kernel.kill_agent(agent_id).expect("Agent should be killed");
+    kernel.kill_agent(agent_id, &openfang_types::context::RequestContext::default()).expect("Agent should be killed");
     kernel.shutdown();
 }
 
@@ -157,8 +157,8 @@ memory_write = ["self.*"]
     assert!(!r2.response.is_empty());
 
     // Cleanup
-    kernel.kill_agent(id1).unwrap();
-    kernel.kill_agent(id2).unwrap();
+    kernel.kill_agent(id1, &openfang_types::context::RequestContext::default()).unwrap();
+    kernel.kill_agent(id2, &openfang_types::context::RequestContext::default()).unwrap();
     kernel.shutdown();
 }
 

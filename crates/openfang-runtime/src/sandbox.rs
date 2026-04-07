@@ -65,6 +65,8 @@ pub struct GuestState {
     pub agent_id: String,
     /// Tokio runtime handle for async operations in sync host functions.
     pub tokio_handle: tokio::runtime::Handle,
+    /// Request context for tenant-scoped operations.
+    pub ctx: openfang_types::context::RequestContext,
 }
 
 /// Result of executing a WASM module.
@@ -164,6 +166,7 @@ impl WasmSandbox {
                 kernel,
                 agent_id: agent_id.to_string(),
                 tokio_handle,
+                ctx: openfang_types::context::RequestContext::default(),
             },
         );
 

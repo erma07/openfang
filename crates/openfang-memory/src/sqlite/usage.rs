@@ -29,11 +29,12 @@ impl UsageStore {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO usage_events (id, agent_id, timestamp, model, input_tokens, output_tokens, cost_usd, tool_calls)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO usage_events (id, agent_id, tenant_id, timestamp, model, input_tokens, output_tokens, cost_usd, tool_calls)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 id,
                 record.agent_id.0.to_string(),
+                record.tenant_id,
                 now,
                 record.model,
                 record.input_tokens as i64,
@@ -274,6 +275,40 @@ impl UsageStore {
         Ok(cost)
     }
 
+    /// Query total cost today for a tenant.
+    pub fn query_tenant_daily(&self, tenant_id: &str) -> OpenFangResult<f64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let cost: f64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
+                 WHERE tenant_id = ?1 AND timestamp > datetime('now', 'start of day')",
+                rusqlite::params![tenant_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        Ok(cost)
+    }
+
+    /// Query total cost in the current calendar month for a tenant.
+    pub fn query_tenant_monthly(&self, tenant_id: &str) -> OpenFangResult<f64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let cost: f64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
+                 WHERE tenant_id = ?1 AND timestamp > datetime('now', 'start of month')",
+                rusqlite::params![tenant_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        Ok(cost)
+    }
+
     /// Delete usage events older than the given number of days.
     pub fn cleanup_old(&self, days: u32) -> OpenFangResult<usize> {
         let conn = self
@@ -329,6 +364,12 @@ impl UsageBackend for UsageStore {
     fn cleanup_old(&self, days: u32) -> OpenFangResult<usize> {
         UsageStore::cleanup_old(self, days)
     }
+    fn query_tenant_daily(&self, tenant_id: &str) -> OpenFangResult<f64> {
+        UsageStore::query_tenant_daily(self, tenant_id)
+    }
+    fn query_tenant_monthly(&self, tenant_id: &str) -> OpenFangResult<f64> {
+        UsageStore::query_tenant_monthly(self, tenant_id)
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +391,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "claude-haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
@@ -361,6 +403,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "claude-sonnet".to_string(),
                 input_tokens: 500,
                 output_tokens: 200,
@@ -386,6 +429,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id: a1,
+                tenant_id: None,
                 model: "haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
@@ -397,6 +441,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id: a2,
+                tenant_id: None,
                 model: "sonnet".to_string(),
                 input_tokens: 200,
                 output_tokens: 100,
@@ -419,6 +464,7 @@ mod tests {
             store
                 .record(&UsageRecord {
                     agent_id,
+                    tenant_id: None,
                     model: "haiku".to_string(),
                     input_tokens: 100,
                     output_tokens: 50,
@@ -431,6 +477,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "sonnet".to_string(),
                 input_tokens: 500,
                 output_tokens: 200,
@@ -455,6 +502,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
@@ -475,6 +523,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
@@ -495,6 +544,7 @@ mod tests {
         store
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,

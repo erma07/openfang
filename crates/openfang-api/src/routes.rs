@@ -1,10 +1,11 @@
 //! Route handlers for the OpenFang API.
 
+use crate::middleware::AuthenticatedUser;
 use crate::types::*;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
+use axum::{Extension, Json};
 use dashmap::DashMap;
 use openfang_channels::bridge::channel_command_specs;
 use openfang_kernel::triggers::{TriggerId, TriggerPattern};
@@ -44,6 +45,23 @@ pub struct AppState {
     /// Thread-safe mutable budget config. Updated via PUT /api/budget.
     /// Initialized from `kernel.config.budget` at startup.
     pub budget_config: Arc<tokio::sync::RwLock<openfang_types::config::BudgetConfig>>,
+}
+
+/// Build a [`RequestContext`] from an optionally-extracted authenticated user.
+///
+/// When the auth middleware identifies the caller (via API key or session cookie),
+/// it inserts an [`AuthenticatedUser`] into request extensions. This helper
+/// converts that into a `RequestContext` with `user_id` set to the authenticated
+/// username. If no auth user is present (e.g. auth disabled), returns a default
+/// context.
+fn ctx_from_auth(auth: &Option<Extension<AuthenticatedUser>>) -> openfang_types::context::RequestContext {
+    match auth {
+        Some(Extension(user)) => openfang_types::context::RequestContext {
+            user_id: Some(user.username.clone()),
+            ..Default::default()
+        },
+        None => openfang_types::context::RequestContext::default(),
+    }
 }
 
 /// POST /api/agents — Spawn a new agent.
@@ -121,7 +139,9 @@ pub async fn spawn_agent(
             }
             Err(e) => {
                 tracing::warn!("Manifest signature verification failed: {e}");
+                // System-level security event — caller identity not relevant
                 state.kernel.audit_log.record(
+                    &openfang_types::context::RequestContext::default(),
                     "system",
                     openfang_runtime::audit::AuditAction::AuthAttempt,
                     "manifest signature verification failed",
@@ -313,6 +333,8 @@ pub fn inject_attachments_into_session(
         _ => openfang_memory::session::Session {
             id: entry.session_id,
             agent_id,
+            // Fallback empty session — no request context available
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -376,6 +398,12 @@ pub async fn send_message(
         None
     };
 
+    let ctx = openfang_types::context::RequestContext {
+        tenant_id: req.tenant_id.clone(),
+        user_id: req.sender_id.clone(),
+        group_id: req.group_id.clone(),
+    };
+
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
     match state
         .kernel
@@ -386,6 +414,7 @@ pub async fn send_message(
             content_blocks,
             req.sender_id,
             req.sender_name,
+            ctx,
         )
         .await
     {
@@ -659,7 +688,9 @@ pub async fn get_agent_session(
 pub async fn kill_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -670,7 +701,7 @@ pub async fn kill_agent(
         }
     };
 
-    match state.kernel.kill_agent(agent_id) {
+    match state.kernel.kill_agent(agent_id, &ctx) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "killed", "agent_id": id})),
@@ -788,8 +819,9 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// POST /api/shutdown — Graceful shutdown.
 pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     tracing::info!("Shutdown requested via API");
-    // SECURITY: Record shutdown in audit trail
+    // System action — no per-user auth context available (loopback-only endpoint)
     state.kernel.audit_log.record(
+        &openfang_types::context::RequestContext::default(),
         "system",
         openfang_runtime::audit::AuditAction::ConfigChange,
         "shutdown requested via API",
@@ -1464,6 +1496,12 @@ pub async fn send_message_stream(
             .into_response();
     }
 
+    let ctx = openfang_types::context::RequestContext {
+        tenant_id: req.tenant_id.clone(),
+        user_id: req.sender_id.clone(),
+        group_id: req.group_id.clone(),
+    };
+
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
     let (rx, _handle) = match state.kernel.send_message_streaming(
         agent_id,
@@ -1472,6 +1510,7 @@ pub async fn send_message_stream(
         req.sender_id,
         req.sender_name,
         None, // SSE streaming doesn't support image attachments yet
+        ctx,
     ) {
         Ok(pair) => pair,
         Err(e) => {
@@ -5775,8 +5814,10 @@ pub async fn update_agent(
 pub async fn patch_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -5823,7 +5864,7 @@ pub async fn patch_agent(
         let explicit_provider = body.get("provider").and_then(|v| v.as_str());
         if let Err(e) = state
             .kernel
-            .set_agent_model(agent_id, model, explicit_provider)
+            .set_agent_model(agent_id, model, explicit_provider, &ctx)
         {
             return (
                 StatusCode::BAD_REQUEST,
@@ -6757,8 +6798,10 @@ pub async fn a2a_external_task_status(
 /// external MCP clients to connect over HTTP instead.
 pub async fn mcp_http(
     State(state): State<Arc<AppState>>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
     Json(request): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     // Gather all available tools (builtin + skills + MCP)
     let mut tools = builtin_tool_definitions();
     {
@@ -6834,6 +6877,7 @@ pub async fn mcp_http(
                 None
             },
             Some(&*state.kernel.process_manager),
+            &ctx,
         )
         .await;
 
@@ -6884,8 +6928,10 @@ pub async fn list_agent_sessions(
 pub async fn create_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -6896,7 +6942,7 @@ pub async fn create_agent_session(
         }
     };
     let label = req.get("label").and_then(|v| v.as_str());
-    match state.kernel.create_agent_session(agent_id, label) {
+    match state.kernel.create_agent_session(agent_id, label, &ctx) {
         Ok(session) => (StatusCode::OK, Json(session)),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -6946,7 +6992,9 @@ pub async fn switch_agent_session(
 pub async fn reset_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -6956,7 +7004,7 @@ pub async fn reset_session(
             )
         }
     };
-    match state.kernel.reset_session(agent_id) {
+    match state.kernel.reset_session(agent_id, &ctx) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": "Session reset"})),
@@ -6972,7 +7020,9 @@ pub async fn reset_session(
 pub async fn clear_agent_history(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -6988,7 +7038,7 @@ pub async fn clear_agent_history(
             Json(serde_json::json!({"error": "Agent not found"})),
         );
     }
-    match state.kernel.clear_agent_history(agent_id) {
+    match state.kernel.clear_agent_history(agent_id, &ctx) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": "All history cleared"})),
@@ -7060,8 +7110,10 @@ pub async fn stop_agent(
 pub async fn set_model(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -7083,7 +7135,7 @@ pub async fn set_model(
     let explicit_provider = body["provider"].as_str();
     match state
         .kernel
-        .set_agent_model(agent_id, model, explicit_provider)
+        .set_agent_model(agent_id, model, explicit_provider, &ctx)
     {
         Ok(()) => {
             // Return the resolved model+provider so frontend stays in sync.
@@ -7247,8 +7299,10 @@ pub async fn get_agent_skills(
 pub async fn set_agent_skills(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -7266,7 +7320,7 @@ pub async fn set_agent_skills(
                 .collect()
         })
         .unwrap_or_default();
-    match state.kernel.set_agent_skills(agent_id, skills.clone()) {
+    match state.kernel.set_agent_skills(agent_id, skills.clone(), &ctx) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "skills": skills})),
@@ -7332,8 +7386,10 @@ pub async fn get_agent_mcp_servers(
 pub async fn set_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -7353,7 +7409,7 @@ pub async fn set_agent_mcp_servers(
         .unwrap_or_default();
     match state
         .kernel
-        .set_agent_mcp_servers(agent_id, servers.clone())
+        .set_agent_mcp_servers(agent_id, servers.clone(), &ctx)
     {
         Ok(()) => (
             StatusCode::OK,
@@ -8779,8 +8835,10 @@ pub struct PatchAgentConfigRequest {
 pub async fn patch_agent_config(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
     Json(req): Json<PatchAgentConfigRequest>,
 ) -> impl IntoResponse {
+    let ctx = ctx_from_auth(&auth_user);
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -8947,7 +9005,7 @@ pub async fn patch_agent_config(
                     if let Err(e) =
                         state
                             .kernel
-                            .set_agent_model(agent_id, new_model, Some(new_provider))
+                            .set_agent_model(agent_id, new_model, Some(new_provider), &ctx)
                     {
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
@@ -8956,7 +9014,7 @@ pub async fn patch_agent_config(
                     }
                 } else {
                     // Provider is empty string — resolve from catalog
-                    if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None) {
+                    if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None, &ctx) {
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({"error": format!("{e}")})),
@@ -8965,7 +9023,7 @@ pub async fn patch_agent_config(
                 }
             } else {
                 // No provider field at all — resolve from catalog
-                if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None) {
+                if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None, &ctx) {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({"error": format!("{e}")})),
@@ -9859,8 +9917,9 @@ pub async fn reject_request(
 /// and applies hot-reloadable actions (approval policy, cron limits, etc.).
 /// Returns the reload plan showing what changed and what was applied.
 pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // SECURITY: Record config reload in audit trail
+    // System action — no per-user auth context available
     state.kernel.audit_log.record(
+        &openfang_types::context::RequestContext::default(),
         "system",
         openfang_runtime::audit::AuditAction::ConfigChange,
         "config reload requested via API",
@@ -10115,7 +10174,9 @@ pub async fn config_set(
         Err(_) => "saved_reload_failed",
     };
 
+    // System action — no per-user auth context available
     state.kernel.audit_log.record(
+        &openfang_types::context::RequestContext::default(),
         "system",
         openfang_runtime::audit::AuditAction::ConfigChange,
         format!("config set: {path}"),
@@ -11405,8 +11466,9 @@ pub async fn auth_login(
     };
 
     if !username_ok || !crate::session_auth::verify_password(password, &auth_cfg.password_hash) {
-        // Audit log the failed attempt
+        // Pre-auth event — caller not yet authenticated, username recorded in detail
         state.kernel.audit_log.record(
+            &openfang_types::context::RequestContext::default(),
             "system",
             openfang_runtime::audit::AuditAction::AuthAttempt,
             "dashboard login failed",
@@ -11435,7 +11497,12 @@ pub async fn auth_login(
     let cookie =
         format!("openfang_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl_secs}");
 
+    let login_ctx = openfang_types::context::RequestContext {
+        user_id: Some(username.to_string()),
+        ..Default::default()
+    };
     state.kernel.audit_log.record(
+        &login_ctx,
         "system",
         openfang_runtime::audit::AuditAction::AuthAttempt,
         "dashboard login success",

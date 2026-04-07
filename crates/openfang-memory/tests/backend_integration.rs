@@ -78,9 +78,10 @@ mod sqlite {
         let store = SemanticStore::new(conn);
         let agent = AgentId::new();
 
+        let ctx = openfang_types::context::RequestContext::default();
         let id = SemanticBackend::remember(
             &store, agent, "The quick brown fox jumps over the lazy dog",
-            MemorySource::Conversation, "episodic", HashMap::new(), None,
+            MemorySource::Conversation, "episodic", HashMap::new(), None, &ctx,
         ).unwrap();
 
         let results = SemanticBackend::recall(&store, "quick brown fox", 10, None, None).unwrap();
@@ -101,10 +102,11 @@ mod sqlite {
         let store = SemanticStore::new(conn);
         let agent = AgentId::new();
 
+        let ctx = openfang_types::context::RequestContext::default();
         let embedding = vec![0.1f32, 0.2, 0.3, 0.4];
         let id = SemanticBackend::remember(
             &store, agent, "vector test", MemorySource::System, "episodic",
-            HashMap::new(), Some(&embedding),
+            HashMap::new(), Some(&embedding), &ctx,
         ).unwrap();
 
         let results = SemanticBackend::recall(&store, "", 10, None, Some(&embedding)).unwrap();
@@ -123,22 +125,26 @@ mod sqlite {
             id: String::new(), entity_type: openfang_types::memory::EntityType::Person,
             name: "Alice".to_string(), properties: HashMap::new(),
             created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+            ctx: openfang_types::context::RequestContext::default(),
         }).unwrap();
 
         let acme_id = store.add_entity(openfang_types::memory::Entity {
             id: String::new(), entity_type: openfang_types::memory::EntityType::Organization,
             name: "Acme Corp".to_string(), properties: HashMap::new(),
             created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+            ctx: openfang_types::context::RequestContext::default(),
         }).unwrap();
 
         store.add_relation(openfang_types::memory::Relation {
             source: alice_id, relation: openfang_types::memory::RelationType::WorksAt,
             target: acme_id, properties: HashMap::new(), confidence: 0.9,
             created_at: chrono::Utc::now(),
+            ctx: openfang_types::context::RequestContext::default(),
         }).unwrap();
 
         let matches = store.query_graph(openfang_types::memory::GraphPattern {
             source: Some("Alice".to_string()), relation: None, target: None, max_depth: 1,
+            tenant_id: None,
         }).unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].source.name, "Alice");
@@ -151,10 +157,10 @@ mod sqlite {
         let store = SessionStore::new(conn);
         let agent = AgentId::new();
 
-        let session = store.create_session(agent).unwrap();
+        let session = store.create_session(agent, &openfang_types::context::RequestContext::default()).unwrap();
         assert!(store.get_session(session.id).unwrap().is_some());
 
-        let labeled = store.create_session_with_label(agent, Some("test-label")).unwrap();
+        let labeled = store.create_session_with_label(agent, Some("test-label"), &openfang_types::context::RequestContext::default()).unwrap();
         assert_eq!(labeled.label, Some("test-label".to_string()));
 
         let found = store.find_session_by_label(agent, "test-label").unwrap();
@@ -176,7 +182,7 @@ mod sqlite {
         let agent = AgentId::new();
 
         store.record(&UsageRecord {
-            agent_id: agent, model: "gpt-4".to_string(),
+            agent_id: agent, tenant_id: None, model: "gpt-4".to_string(),
             input_tokens: 100, output_tokens: 50, cost_usd: 0.005, tool_calls: 2,
         }).unwrap();
 
@@ -281,8 +287,8 @@ mod sqlite {
         let store = SqliteAuditStore::new(conn);
 
         // Append entries
-        store.append_entry("agent-1", "message", "sent hello", "success").unwrap();
-        store.append_entry("agent-1", "tool_call", "ran search", "success").unwrap();
+        store.append_entry(&openfang_types::context::RequestContext::default(), "agent-1", "message", "sent hello", "success").unwrap();
+        store.append_entry(&openfang_types::context::RequestContext::default(), "agent-1", "tool_call", "ran search", "success").unwrap();
 
         // Load all
         let entries = store.load_entries(None, 10).unwrap();
@@ -349,9 +355,10 @@ mod postgres {
         let store = PgSemanticStore::new(pool);
         let agent = AgentId::new();
 
+        let ctx = openfang_types::context::RequestContext::default();
         let id = SemanticBackend::remember(
             &store, agent, "The quick brown fox jumps over the lazy dog",
-            MemorySource::Conversation, "episodic", HashMap::new(), None,
+            MemorySource::Conversation, "episodic", HashMap::new(), None, &ctx,
         ).unwrap();
 
         let results = SemanticBackend::recall(&store, "quick brown fox", 10, Some(agent_filter(agent)), None).unwrap();
@@ -374,28 +381,33 @@ mod postgres {
         };
         let store = PgKnowledgeStore::new(pool);
 
+        let ctx = openfang_types::context::RequestContext::default();
         let alice_id = store.add_entity(openfang_types::memory::Entity {
             id: String::new(), entity_type: openfang_types::memory::EntityType::Person,
             name: "Alice".to_string(), properties: HashMap::new(),
             created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-        }).unwrap();
+            ctx: openfang_types::context::RequestContext::default(),
+        }, &ctx).unwrap();
 
         let acme_id = store.add_entity(openfang_types::memory::Entity {
             id: String::new(), entity_type: openfang_types::memory::EntityType::Organization,
             name: "Acme Corp".to_string(), properties: HashMap::new(),
             created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
-        }).unwrap();
+            ctx: openfang_types::context::RequestContext::default(),
+        }, &ctx).unwrap();
 
         store.add_relation(openfang_types::memory::Relation {
             source: alice_id.clone(), relation: openfang_types::memory::RelationType::WorksAt,
             target: acme_id, properties: HashMap::new(), confidence: 0.9,
             created_at: chrono::Utc::now(),
-        }).unwrap();
+            ctx: openfang_types::context::RequestContext::default(),
+        }, &ctx).unwrap();
 
         // Query by entity ID (unique) to avoid matching entities from other test runs
         let matches = store.query_graph(openfang_types::memory::GraphPattern {
             source: Some(alice_id), relation: None, target: None, max_depth: 1,
-        }).unwrap();
+            tenant_id: None,
+        }, &ctx).unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].source.name, "Alice");
         assert_eq!(matches[0].target.name, "Acme Corp");
@@ -410,10 +422,10 @@ mod postgres {
         let store = PgSessionStore::new(pool);
         let agent = AgentId::new();
 
-        let session = store.create_session(agent).unwrap();
+        let session = store.create_session(agent, &openfang_types::context::RequestContext::default()).unwrap();
         assert!(store.get_session(session.id).unwrap().is_some());
 
-        let labeled = store.create_session_with_label(agent, Some("pg-test")).unwrap();
+        let labeled = store.create_session_with_label(agent, Some("pg-test"), &openfang_types::context::RequestContext::default()).unwrap();
         assert_eq!(store.find_session_by_label(agent, "pg-test").unwrap().unwrap().id, labeled.id);
 
         assert!(store.list_agent_sessions(agent).unwrap().len() >= 2);
@@ -433,7 +445,7 @@ mod postgres {
         let agent = AgentId::new();
 
         store.record(&UsageRecord {
-            agent_id: agent, model: "gpt-4".to_string(),
+            agent_id: agent, tenant_id: None, model: "gpt-4".to_string(),
             input_tokens: 100, output_tokens: 50, cost_usd: 0.005, tool_calls: 2,
         }).unwrap();
 
@@ -551,8 +563,8 @@ mod postgres {
         let store = PgAuditStore::new(pool);
 
         // Append entries
-        store.append_entry("agent-1", "message", "sent hello", "success").unwrap();
-        store.append_entry("agent-1", "tool_call", "ran search", "success").unwrap();
+        store.append_entry(&openfang_types::context::RequestContext::default(), "agent-1", "message", "sent hello", "success").unwrap();
+        store.append_entry(&openfang_types::context::RequestContext::default(), "agent-1", "tool_call", "ran search", "success").unwrap();
 
         // Load all
         let entries = store.load_entries(None, 10).unwrap();
@@ -590,9 +602,10 @@ mod qdrant_tests {
             None => { eprintln!("SKIP: Qdrant not available"); return; }
         };
 
+        let ctx = openfang_types::context::RequestContext::default();
         let result = SemanticBackend::remember(
             &store, AgentId::new(), "no embedding test",
-            MemorySource::Conversation, "episodic", HashMap::new(), None,
+            MemorySource::Conversation, "episodic", HashMap::new(), None, &ctx,
         );
         assert!(result.is_err());
     }
@@ -604,11 +617,12 @@ mod qdrant_tests {
             None => { eprintln!("SKIP: Qdrant not available"); return; }
         };
         let agent = AgentId::new();
+        let ctx = openfang_types::context::RequestContext::default();
 
         let embedding = vec![0.1f32, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
         let id = SemanticBackend::remember(
             &store, agent, "Qdrant vector test content",
-            MemorySource::Conversation, "episodic", HashMap::new(), Some(&embedding),
+            MemorySource::Conversation, "episodic", HashMap::new(), Some(&embedding), &ctx,
         ).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -646,10 +660,11 @@ mod qdrant_tests {
         };
         let agent = AgentId::new();
 
+        let ctx = openfang_types::context::RequestContext::default();
         let original = vec![1.0f32, 0.0, 0.0, 0.0];
         let id = SemanticBackend::remember(
             &store, agent, "update embedding test",
-            MemorySource::System, "episodic", HashMap::new(), Some(&original),
+            MemorySource::System, "episodic", HashMap::new(), Some(&original), &ctx,
         ).unwrap();
 
         let updated = vec![0.0f32, 1.0, 0.0, 0.0];
@@ -669,13 +684,14 @@ mod qdrant_tests {
         };
         let agent = AgentId::new();
 
+        let ctx = openfang_types::context::RequestContext::default();
         let emb1 = vec![1.0f32, 0.0, 0.0, 0.0];
         let emb2 = vec![0.0f32, 1.0, 0.0, 0.0];
         let emb3 = vec![0.9f32, 0.1, 0.0, 0.0];
 
-        SemanticBackend::remember(&store, agent, "memory A", MemorySource::System, "episodic", HashMap::new(), Some(&emb1)).unwrap();
-        SemanticBackend::remember(&store, agent, "memory B", MemorySource::System, "episodic", HashMap::new(), Some(&emb2)).unwrap();
-        SemanticBackend::remember(&store, agent, "memory C", MemorySource::System, "episodic", HashMap::new(), Some(&emb3)).unwrap();
+        SemanticBackend::remember(&store, agent, "memory A", MemorySource::System, "episodic", HashMap::new(), Some(&emb1), &ctx).unwrap();
+        SemanticBackend::remember(&store, agent, "memory B", MemorySource::System, "episodic", HashMap::new(), Some(&emb2), &ctx).unwrap();
+        SemanticBackend::remember(&store, agent, "memory C", MemorySource::System, "episodic", HashMap::new(), Some(&emb3), &ctx).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -709,17 +725,18 @@ mod substrate {
         substrate.set(agent, "name", serde_json::json!("test-agent")).await.unwrap();
         assert_eq!(substrate.get(agent, "name").await.unwrap(), Some(serde_json::json!("test-agent")));
 
-        substrate.remember(agent, "Integration test memory", MemorySource::Conversation, "episodic", HashMap::new()).await.unwrap();
+        substrate.remember(agent, "Integration test memory", MemorySource::Conversation, "episodic", HashMap::new(), &openfang_types::context::RequestContext::default()).await.unwrap();
         assert_eq!(substrate.recall("integration test", 10, None).await.unwrap().len(), 1);
 
         let eid = substrate.add_entity(openfang_types::memory::Entity {
             id: String::new(), entity_type: openfang_types::memory::EntityType::Concept,
             name: "Rust".to_string(), properties: HashMap::new(),
             created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+            ctx: openfang_types::context::RequestContext::default(),
         }).await.unwrap();
         assert!(!eid.is_empty());
 
-        let session = substrate.create_session(agent).unwrap();
+        let session = substrate.create_session(agent, &openfang_types::context::RequestContext::default()).unwrap();
         substrate.delete_session(session.id).unwrap();
 
         assert_eq!(substrate.consolidate().await.unwrap().memories_merged, 0);

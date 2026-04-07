@@ -163,12 +163,14 @@ fn parse_threema_webhook(
         sender: ChannelUser {
             platform_id: from.clone(),
             display_name: from.clone(),
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group: false, // Threema Gateway simple mode is 1:1
+        group_id: None,
         thread_id: None,
         metadata,
     })

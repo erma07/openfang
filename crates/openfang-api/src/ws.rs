@@ -527,6 +527,8 @@ async fn handle_text_message(
                 None,
                 None,
                 ws_content_blocks,
+                // No user identity available from WS auth (API key only)
+                openfang_types::context::RequestContext::default(),
             ) {
                 Ok((mut rx, handle)) => {
                     // Forward stream events to WebSocket with debouncing.
@@ -838,7 +840,7 @@ async fn handle_command(
     verbose: &Arc<AtomicU8>,
 ) -> serde_json::Value {
     match cmd {
-        "new" | "reset" => match state.kernel.reset_session(agent_id) {
+        "new" | "reset" => match state.kernel.reset_session(agent_id, &openfang_types::context::RequestContext::default()) {
             Ok(()) => {
                 serde_json::json!({"type": "command_result", "command": cmd, "message": "Session reset. Chat history cleared."})
             }
@@ -869,7 +871,7 @@ async fn handle_command(
                     serde_json::json!({"type": "error", "content": "Agent not found"})
                 }
             } else {
-                match state.kernel.set_agent_model(agent_id, args, None) {
+                match state.kernel.set_agent_model(agent_id, args, None, &openfang_types::context::RequestContext::default()) {
                     Ok(()) => {
                         if let Some(entry) = state.kernel.registry.get(agent_id) {
                             let model = &entry.manifest.model.model;

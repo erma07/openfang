@@ -148,6 +148,7 @@ impl SemanticBackend for QdrantSemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<MemoryId> {
         let id = MemoryId::new();
 
@@ -166,7 +167,7 @@ impl SemanticBackend for QdrantSemanticStore {
         let meta_str = helpers::serialize_metadata(&metadata)?;
         let now = chrono::Utc::now().to_rfc3339();
 
-        let payload: HashMap<String, qdrant_client::qdrant::Value> = HashMap::from([
+        let mut payload: HashMap<String, qdrant_client::qdrant::Value> = HashMap::from([
             ("agent_id".into(), agent_id.0.to_string().into()),
             ("content".into(), content.to_string().into()),
             ("source".into(), source_str.into()),
@@ -177,6 +178,15 @@ impl SemanticBackend for QdrantSemanticStore {
             ("accessed_at".into(), now.into()),
             ("access_count".into(), 0i64.into()),
         ]);
+        if let Some(ref tenant_id) = ctx.tenant_id {
+            payload.insert("tenant_id".into(), tenant_id.clone().into());
+        }
+        if let Some(ref user_id) = ctx.user_id {
+            payload.insert("user_id".into(), user_id.clone().into());
+        }
+        if let Some(ref group_id) = ctx.group_id {
+            payload.insert("group_id".into(), group_id.clone().into());
+        }
 
         let point = PointStruct::new(id.0.to_string(), embedding.to_vec(), payload);
 
@@ -208,6 +218,15 @@ impl SemanticBackend for QdrantSemanticStore {
             }
             if let Some(ref scope) = f.scope {
                 conditions.push(Condition::matches("scope", scope.clone()));
+            }
+            if let Some(ref tenant_id) = f.tenant_id {
+                conditions.push(Condition::matches("tenant_id", tenant_id.clone()));
+            }
+            if let Some(ref user_id) = f.user_id {
+                conditions.push(Condition::matches("user_id", user_id.clone()));
+            }
+            if let Some(ref group_id) = f.group_id {
+                conditions.push(Condition::matches("group_id", group_id.clone()));
             }
         }
 
@@ -286,6 +305,7 @@ impl SemanticBackend for QdrantSemanticStore {
                     accessed_at,
                     access_count,
                     scope,
+                    ctx: openfang_types::context::RequestContext::default(),
                 });
             }
 

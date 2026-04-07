@@ -135,14 +135,23 @@ impl StructuredStore {
             "ALTER TABLE agents ADD COLUMN identity TEXT DEFAULT '{}'",
             [],
         );
+        // Add tenant_id / owner_user_id columns (migration compat)
+        let _ = conn.execute(
+            "ALTER TABLE agents ADD COLUMN tenant_id TEXT DEFAULT NULL",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE agents ADD COLUMN owner_user_id TEXT DEFAULT NULL",
+            [],
+        );
 
         let identity_json = serde_json::to_string(&entry.identity)
             .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
 
         conn.execute(
-            "INSERT INTO agents (id, name, manifest, state, created_at, updated_at, session_id, identity)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(id) DO UPDATE SET name = ?2, manifest = ?3, state = ?4, updated_at = ?6, session_id = ?7, identity = ?8",
+            "INSERT INTO agents (id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id, owner_user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, manifest = ?3, state = ?4, updated_at = ?6, session_id = ?7, identity = ?8, tenant_id = ?9, owner_user_id = ?10",
             rusqlite::params![
                 entry.id.0.to_string(),
                 entry.name,
@@ -152,6 +161,8 @@ impl StructuredStore {
                 now,
                 entry.session_id.0.to_string(),
                 identity_json,
+                entry.tenant_id,
+                entry.owner_user_id,
             ],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -166,7 +177,10 @@ impl StructuredStore {
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         let mut stmt = conn
-            .prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id, identity FROM agents WHERE id = ?1")
+            .prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id, owner_user_id FROM agents WHERE id = ?1")
+            .or_else(|_| {
+                conn.prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id, identity FROM agents WHERE id = ?1")
+            })
             .or_else(|_| {
                 conn.prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id FROM agents WHERE id = ?1")
                     .or_else(|_| {
@@ -192,6 +206,16 @@ impl StructuredStore {
             } else {
                 None
             };
+            let tenant_id: Option<String> = if col_count >= 9 {
+                row.get(8).ok().flatten()
+            } else {
+                None
+            };
+            let owner_user_id: Option<String> = if col_count >= 10 {
+                row.get(9).ok().flatten()
+            } else {
+                None
+            };
             Ok((
                 name,
                 manifest_blob,
@@ -199,11 +223,13 @@ impl StructuredStore {
                 created_str,
                 session_id_str,
                 identity_str,
+                tenant_id,
+                owner_user_id,
             ))
         });
 
         match result {
-            Ok((name, manifest_blob, state_str, created_str, session_id_str, identity_str)) => {
+            Ok((name, manifest_blob, state_str, created_str, session_id_str, identity_str, tenant_id, owner_user_id)) => {
                 let manifest = helpers::deserialize_manifest(&manifest_blob)?;
                 let state = serde_json::from_str(&state_str)
                     .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
@@ -231,6 +257,8 @@ impl StructuredStore {
                     identity,
                     onboarding_completed: false,
                     onboarding_completed_at: None,
+                    tenant_id,
+                    owner_user_id,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -264,11 +292,14 @@ impl StructuredStore {
             .lock()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
-        // Try with identity+session_id columns first, fall back gracefully
+        // Try with all columns first, fall back gracefully
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, manifest, state, created_at, updated_at, session_id, identity FROM agents",
+                "SELECT id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id, owner_user_id FROM agents",
             )
+            .or_else(|_| {
+                conn.prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id, identity FROM agents")
+            })
             .or_else(|_| {
                 conn.prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id FROM agents")
             })
@@ -295,6 +326,16 @@ impl StructuredStore {
                 } else {
                     None
                 };
+                let tenant_id: Option<String> = if col_count >= 9 {
+                    row.get(8).ok().flatten()
+                } else {
+                    None
+                };
+                let owner_user_id: Option<String> = if col_count >= 10 {
+                    row.get(9).ok().flatten()
+                } else {
+                    None
+                };
                 Ok((
                     id_str,
                     name,
@@ -303,6 +344,8 @@ impl StructuredStore {
                     created_str,
                     session_id_str,
                     identity_str,
+                    tenant_id,
+                    owner_user_id,
                 ))
             })
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -312,7 +355,7 @@ impl StructuredStore {
         let mut repair_queue: Vec<(String, Vec<u8>, String)> = Vec::new();
 
         for row in rows {
-            let (id_str, name, manifest_blob, state_str, created_str, session_id_str, identity_str) =
+            let (id_str, name, manifest_blob, state_str, created_str, session_id_str, identity_str, tenant_id, owner_user_id) =
                 match row {
                     Ok(r) => r,
                     Err(e) => {
@@ -393,6 +436,8 @@ impl StructuredStore {
                 identity,
                 onboarding_completed: false,
                 onboarding_completed_at: None,
+                tenant_id,
+                owner_user_id,
             });
         }
 

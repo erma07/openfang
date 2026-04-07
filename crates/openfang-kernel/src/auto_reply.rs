@@ -146,6 +146,9 @@ mod tests {
             max_concurrent: 3,
             timeout_secs: 120,
             suppress_patterns: vec!["/stop".to_string(), "/pause".to_string()],
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }
     }
 
@@ -186,6 +189,9 @@ mod tests {
             max_concurrent: 2,
             timeout_secs: 120,
             suppress_patterns: Vec::new(),
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         };
         let engine = AutoReplyEngine::new(config);
         assert_eq!(engine.available_permits(), 2);

@@ -32,10 +32,11 @@ impl UsageBackend for PgUsageStore {
             let client = self.pool.get().await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             client.execute(
-                "INSERT INTO usage_events (agent_id, model, input_tokens, output_tokens, cost_usd, tool_calls)
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                "INSERT INTO usage_events (agent_id, tenant_id, model, input_tokens, output_tokens, cost_usd, tool_calls)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
                 &[
-                    &record.agent_id.0.to_string(), &record.model,
+                    &record.agent_id.0.to_string(), &record.tenant_id,
+                    &record.model,
                     &(record.input_tokens as i64), &(record.output_tokens as i64),
                     &record.cost_usd, &(record.tool_calls as i64),
                 ],
@@ -184,6 +185,28 @@ impl UsageBackend for PgUsageStore {
                 &[&(days as i32)],
             ).await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
             Ok(deleted as usize)
+        })
+    }
+
+    fn query_tenant_daily(&self, tenant_id: &str) -> OpenFangResult<f64> {
+        self.block_on_pg(async {
+            let client = self.pool.get().await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let row = client.query_one(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM usage_events WHERE tenant_id = $1 AND timestamp >= CURRENT_DATE",
+                &[&tenant_id],
+            ).await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            Ok(row.get(0))
+        })
+    }
+
+    fn query_tenant_monthly(&self, tenant_id: &str) -> OpenFangResult<f64> {
+        self.block_on_pg(async {
+            let client = self.pool.get().await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let row = client.query_one(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM usage_events WHERE tenant_id = $1 AND timestamp >= date_trunc('month', CURRENT_DATE)",
+                &[&tenant_id],
+            ).await.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            Ok(row.get(0))
         })
     }
 }

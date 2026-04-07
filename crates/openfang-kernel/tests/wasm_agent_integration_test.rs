@@ -303,7 +303,7 @@ async fn test_wasm_agent_streaming_fallback() {
     let agent_id = kernel.spawn_agent(manifest).unwrap();
 
     let (mut rx, handle) = kernel
-        .send_message_streaming(agent_id, "Hi!", None, None, None, None)
+        .send_message_streaming(agent_id, "Hi!", None, None, None, None, openfang_types::context::RequestContext::default())
         .expect("Streaming should start");
 
     // Collect all stream events
@@ -403,7 +403,7 @@ memory_write = ["self.*"]
     assert!(kernel.registry.get(llm_id).is_some());
 
     // Kill WASM agent
-    kernel.kill_agent(wasm_id).unwrap();
+    kernel.kill_agent(wasm_id, &openfang_types::context::RequestContext::default()).unwrap();
     assert_eq!(kernel.registry.list().len(), 2);
 
     kernel.shutdown();

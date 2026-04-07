@@ -61,6 +61,8 @@ pub struct PromptContext {
     pub sender_id: Option<String>,
     /// Sender display name.
     pub sender_name: Option<String>,
+    /// Request context (tenant/user/group identity).
+    pub ctx: openfang_types::context::RequestContext,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -156,9 +158,11 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 
     // Section 9.1 — Sender Identity (skip for subagents)
     if !ctx.is_subagent {
-        if let Some(sender_line) =
-            build_sender_section(ctx.sender_name.as_deref(), ctx.sender_id.as_deref())
-        {
+        if let Some(sender_line) = build_sender_section(
+            ctx.sender_name.as_deref(),
+            ctx.sender_id.as_deref(),
+            ctx.ctx.group_id.as_deref(),
+        ) {
             sections.push(sender_line);
         }
     }
@@ -434,11 +438,24 @@ fn build_channel_section(channel: &str) -> String {
     )
 }
 
-fn build_sender_section(sender_name: Option<&str>, sender_id: Option<&str>) -> Option<String> {
-    match (sender_name, sender_id) {
-        (Some(name), Some(id)) => Some(format!("## Sender\nMessage from: {name} ({id})")),
-        (Some(name), None) => Some(format!("## Sender\nMessage from: {name}")),
-        (None, Some(id)) => Some(format!("## Sender\nMessage from: {id}")),
+fn build_sender_section(
+    sender_name: Option<&str>,
+    sender_id: Option<&str>,
+    group_id: Option<&str>,
+) -> Option<String> {
+    let sender_line = match (sender_name, sender_id) {
+        (Some(name), Some(id)) => Some(format!("Message from: {name} ({id})")),
+        (Some(name), None) => Some(format!("Message from: {name}")),
+        (None, Some(id)) => Some(format!("Message from: {id}")),
+        (None, None) => None,
+    };
+
+    let group_line = group_id.map(|g| format!("Group/channel: {g}"));
+
+    match (sender_line, group_line) {
+        (Some(s), Some(g)) => Some(format!("## Sender\n{s}\n{g}")),
+        (Some(s), None) => Some(format!("## Sender\n{s}")),
+        (None, Some(g)) => Some(format!("## Sender\n{g}")),
         (None, None) => None,
     }
 }

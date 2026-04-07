@@ -1833,7 +1833,7 @@ fn cmd_agent_kill(config: Option<PathBuf>, agent_id_str: &str) {
             std::process::exit(1);
         });
         let kernel = boot_kernel(config);
-        match kernel.kill_agent(agent_id) {
+        match kernel.kill_agent(agent_id, &openfang_types::context::RequestContext::default()) {
             Ok(()) => println!("Agent {agent_id} killed."),
             Err(e) => {
                 eprintln!("Failed to kill agent: {e}");

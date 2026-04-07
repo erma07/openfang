@@ -405,12 +405,14 @@ impl ChannelAdapter for EmailAdapter {
                         sender: ChannelUser {
                             platform_id: from_addr.clone(),
                             display_name: from_addr.clone(),
+                            user_id: None,
                             openfang_user: None,
                         },
                         content: ChannelContent::Text(text),
                         target_agent: None, // Routing handled by bridge AgentRouter
                         timestamp: Utc::now(),
                         is_group: false,
+                        group_id: None,
                         thread_id: None,
                         metadata: std::collections::HashMap::new(),
                     };

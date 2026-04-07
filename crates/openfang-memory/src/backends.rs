@@ -26,18 +26,20 @@ pub trait SessionBackend: Send + Sync {
     /// Delete all sessions for an agent.
     fn delete_agent_sessions(&self, agent_id: AgentId) -> OpenFangResult<()>;
     /// Create a new empty session for an agent.
-    fn create_session(&self, agent_id: AgentId) -> OpenFangResult<Session> {
-        self.create_session_with_label(agent_id, None)
+    fn create_session(&self, agent_id: AgentId, ctx: &openfang_types::context::RequestContext) -> OpenFangResult<Session> {
+        self.create_session_with_label(agent_id, None, ctx)
     }
     /// Create a new session with an optional label.
     fn create_session_with_label(
         &self,
         agent_id: AgentId,
         label: Option<&str>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<Session> {
         let session = Session {
             id: SessionId::new(),
             agent_id,
+            ctx: ctx.clone(),
             messages: vec![],
             context_window_tokens: 0,
             label: label.map(|s| s.to_string()),
@@ -178,6 +180,15 @@ pub trait UsageBackend: Send + Sync {
     fn query_today_cost(&self) -> OpenFangResult<f64>;
     /// Delete usage events older than N days. Returns count deleted.
     fn cleanup_old(&self, days: u32) -> OpenFangResult<usize>;
+
+    /// Query total cost for a tenant today.
+    fn query_tenant_daily(&self, _tenant_id: &str) -> OpenFangResult<f64> {
+        Ok(0.0)
+    }
+    /// Query total cost for a tenant this month.
+    fn query_tenant_monthly(&self, _tenant_id: &str) -> OpenFangResult<f64> {
+        Ok(0.0)
+    }
 }
 
 /// Backend for paired device persistence.
@@ -210,6 +221,6 @@ pub trait ConsolidationBackend: Send + Sync {
 
 /// Backend for audit log persistence.
 pub trait AuditBackend: Send + Sync {
-    fn append_entry(&self, agent_id: &str, action: &str, detail: &str, outcome: &str) -> OpenFangResult<()>;
+    fn append_entry(&self, ctx: &openfang_types::context::RequestContext, agent_id: &str, action: &str, detail: &str, outcome: &str) -> OpenFangResult<()>;
     fn load_entries(&self, agent_id: Option<&str>, limit: usize) -> OpenFangResult<Vec<serde_json::Value>>;
 }

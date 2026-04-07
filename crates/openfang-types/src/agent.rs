@@ -38,6 +38,70 @@ impl std::str::FromStr for UserId {
     }
 }
 
+/// Unique identifier for a tenant/organization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TenantId(pub Uuid);
+
+impl TenantId {
+    /// Generate a new random TenantId.
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for TenantId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for TenantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for TenantId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Uuid::parse_str(s)?))
+    }
+}
+
+/// Unique identifier for a group/channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GroupId(pub Uuid);
+
+impl GroupId {
+    /// Generate a new random GroupId.
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for GroupId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for GroupId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for GroupId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Uuid::parse_str(s)?))
+    }
+}
+
 /// Model routing configuration — auto-selects cheap/mid/expensive models by complexity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -491,6 +555,12 @@ pub struct AgentManifest {
     /// Tool blocklist — these tools are excluded (applied after allowlist).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub tool_blocklist: Vec<String>,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -525,6 +595,9 @@ impl Default for AgentManifest {
             exec_policy: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }
     }
 }
@@ -650,6 +723,12 @@ pub struct AgentEntry {
     /// When onboarding was completed.
     #[serde(default)]
     pub onboarding_completed_at: Option<DateTime<Utc>>,
+    /// Tenant ID this agent belongs to.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    /// User who owns/created this agent.
+    #[serde(default)]
+    pub owner_user_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -782,6 +861,9 @@ mod tests {
             exec_policy: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let deserialized: AgentManifest = serde_json::from_str(&json).unwrap();
@@ -1014,6 +1096,8 @@ mod tests {
             identity: AgentIdentity::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
+            owner_user_id: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();
@@ -1076,6 +1160,8 @@ mod tests {
             },
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
+            owner_user_id: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();

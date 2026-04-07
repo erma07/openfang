@@ -248,12 +248,14 @@ impl ChannelAdapter for GotifyAdapter {
                                                 } else {
                                                     title.clone()
                                                 },
+                                                user_id: None,
                                                 openfang_user: None,
                                             },
                                             content,
                                             target_agent: None,
                                             timestamp: Utc::now(),
                                             is_group: false,
+                                            group_id: None,
                                             thread_id: None,
                                             metadata: {
                                                 let mut m = HashMap::new();

@@ -336,12 +336,14 @@ impl ChannelAdapter for MqttAdapter {
                                         sender: ChannelUser {
                                             platform_id: "mqtt-user".to_string(),
                                             display_name: "MQTT User".to_string(),
+                                            user_id: None,
                                             openfang_user: None,
                                         },
                                         content,
                                         target_agent: None,
                                         timestamp: Utc::now(),
                                         is_group: true,
+                                        group_id: None,
                                         thread_id: None,
                                         metadata: {
                                             let mut m = HashMap::new();

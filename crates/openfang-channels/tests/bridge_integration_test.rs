@@ -155,12 +155,14 @@ fn make_text_msg(channel: ChannelType, user_id: &str, text: &str) -> ChannelMess
         sender: ChannelUser {
             platform_id: user_id.to_string(),
             display_name: "TestUser".to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content: ChannelContent::Text(text.to_string()),
         target_agent: None,
         timestamp: chrono::Utc::now(),
         is_group: false,
+        group_id: None,
         thread_id: None,
         metadata: HashMap::new(),
     }
@@ -178,6 +180,7 @@ fn make_command_msg(
         sender: ChannelUser {
             platform_id: user_id.to_string(),
             display_name: "TestUser".to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content: ChannelContent::Command {
@@ -187,6 +190,7 @@ fn make_command_msg(
         target_agent: None,
         timestamp: chrono::Utc::now(),
         is_group: false,
+        group_id: None,
         thread_id: None,
         metadata: HashMap::new(),
     }
@@ -360,7 +364,7 @@ async fn test_bridge_dispatch_agent_select_command() {
     );
 
     // Verify router was updated — user42 should now route to agent_id
-    let resolved = router.resolve(&ChannelType::Telegram, "user42", None);
+    let resolved = router.resolve(&ChannelType::Telegram, "user42", None, &openfang_types::context::RequestContext::default());
     assert_eq!(resolved, Some(agent_id));
 
     manager.stop().await;

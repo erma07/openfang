@@ -485,12 +485,14 @@ impl ChannelAdapter for WeComAdapter {
                                         sender: ChannelUser {
                                             platform_id: user_id.clone(),
                                             display_name: user_id.clone(),
+                                            user_id: None,
                                             openfang_user: None,
                                         },
                                         content: ChannelContent::Text(String::new()),
                                         target_agent: None,
                                         timestamp: Utc::now(),
                                         is_group: false,
+                                        group_id: None,
                                         thread_id: None,
                                         metadata: HashMap::new(),
                                     };
@@ -511,12 +513,14 @@ impl ChannelAdapter for WeComAdapter {
                                         sender: ChannelUser {
                                             platform_id: user_id.clone(),
                                             display_name: user_id.clone(),
+                                            user_id: None,
                                             openfang_user: None,
                                         },
                                         content: ChannelContent::Text(content),
                                         target_agent: None,
                                         timestamp: Utc::now(),
                                         is_group: false,
+                                        group_id: None,
                                         thread_id: None,
                                         metadata: HashMap::new(),
                                     };

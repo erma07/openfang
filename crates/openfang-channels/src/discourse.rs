@@ -300,12 +300,14 @@ impl ChannelAdapter for DiscourseAdapter {
                         sender: ChannelUser {
                             platform_id: username.to_string(),
                             display_name,
+                            user_id: None,
                             openfang_user: None,
                         },
                         content,
                         target_agent: None,
                         timestamp: Utc::now(),
                         is_group: true,
+                        group_id: None,
                         thread_id: Some(format!("topic-{}", topic_id)),
                         metadata: {
                             let mut m = HashMap::new();

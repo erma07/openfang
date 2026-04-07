@@ -324,12 +324,14 @@ fn parse_bluesky_notification(
         sender: ChannelUser {
             platform_id: author_did.to_string(),
             display_name,
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group: false, // Bluesky mentions are treated as direct interactions
+        group_id: None,
         thread_id: None,
         metadata,
     })

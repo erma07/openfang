@@ -4,6 +4,7 @@ use crate::types::ChannelType;
 use dashmap::DashMap;
 use openfang_types::agent::AgentId;
 use openfang_types::config::{AgentBinding, BroadcastConfig, BroadcastStrategy};
+use openfang_types::context::RequestContext;
 use std::sync::Mutex;
 use tracing::warn;
 
@@ -16,10 +17,12 @@ pub struct BindingContext {
     pub account_id: Option<String>,
     /// Peer/user ID (platform_user_id).
     pub peer_id: String,
-    /// Guild/server ID.
+    /// Guild/server ID (Discord/Slack).
     pub guild_id: Option<String>,
     /// User's roles.
     pub roles: Vec<String>,
+    /// Request context (tenant/user/group identity).
+    pub ctx: openfang_types::context::RequestContext,
 }
 
 /// Routes incoming messages to the correct agent.
@@ -138,23 +141,26 @@ impl AgentRouter {
     /// Resolve which agent should handle a message.
     ///
     /// Priority: bindings > direct route > user default > system default.
+    /// `ctx` carries tenant/user/group identity for scoped binding matching.
     pub fn resolve(
         &self,
         channel_type: &ChannelType,
         platform_user_id: &str,
         user_key: Option<&str>,
+        ctx: &RequestContext,
     ) -> Option<AgentId> {
         let channel_key = format!("{channel_type:?}");
 
         // 0. Check bindings (most specific first)
-        let ctx = BindingContext {
+        let binding_ctx = BindingContext {
             channel: channel_type_to_str(channel_type).to_string(),
             account_id: None,
             peer_id: platform_user_id.to_string(),
             guild_id: None,
             roles: Vec::new(),
+            ctx: ctx.clone(),
         };
-        if let Some(agent_id) = self.resolve_binding(&ctx) {
+        if let Some(agent_id) = self.resolve_binding(&binding_ctx) {
             return Some(agent_id);
         }
 
@@ -187,15 +193,31 @@ impl AgentRouter {
     }
 
     /// Resolve with full binding context (supports guild_id, roles, account_id).
+    /// `req_ctx` supplies tenant/user/group identity; its fields are merged into
+    /// the binding context before evaluation.
     pub fn resolve_with_context(
         &self,
         channel_type: &ChannelType,
         platform_user_id: &str,
         user_key: Option<&str>,
         ctx: &BindingContext,
+        req_ctx: &RequestContext,
     ) -> Option<AgentId> {
+        // Merge RequestContext fields into a copy of the binding context
+        let merged = BindingContext {
+            channel: ctx.channel.clone(),
+            account_id: ctx.account_id.clone(),
+            peer_id: ctx.peer_id.clone(),
+            guild_id: ctx.guild_id.clone(),
+            roles: ctx.roles.clone(),
+            ctx: RequestContext {
+                tenant_id: ctx.ctx.tenant_id.clone().or_else(|| req_ctx.tenant_id.clone()),
+                group_id: ctx.ctx.group_id.clone().or_else(|| req_ctx.group_id.clone()),
+                user_id: ctx.ctx.user_id.clone().or_else(|| req_ctx.user_id.clone()),
+            },
+        };
         // 0. Check bindings first
-        if let Some(agent_id) = self.resolve_binding(ctx) {
+        if let Some(agent_id) = self.resolve_binding(&merged) {
             return Some(agent_id);
         }
         // Fall back to standard resolution
@@ -336,6 +358,30 @@ impl AgentRouter {
                 return false;
             }
         }
+        // Three-level scope check (most specific wins):
+        // 1. User scope — if set, only matches if ctx.user_id is in scope_users.
+        // 2. Group scope — if set, only matches if "tenant_id/group_id" is in scope_groups.
+        // 3. Tenant scope — if set, only matches if ctx.tenant_id is in scope_tenants.
+        // If none are set, the binding is global (matches all).
+        if !binding.scope_users.is_empty()
+            && !ctx.ctx.user_id.as_ref().is_some_and(|u| binding.scope_users.contains(u))
+        {
+            return false;
+        }
+        if !binding.scope_groups.is_empty() {
+            let ctx_group_key = match (&ctx.ctx.tenant_id, &ctx.ctx.group_id) {
+                (Some(t), Some(g)) => format!("{t}/{g}"),
+                _ => return false,
+            };
+            if !binding.scope_groups.contains(&ctx_group_key) {
+                return false;
+            }
+        }
+        if !binding.scope_tenants.is_empty()
+            && !ctx.ctx.tenant_id.as_ref().is_some_and(|t| binding.scope_tenants.contains(t))
+        {
+            return false;
+        }
         true
     }
 }
@@ -381,22 +427,22 @@ mod tests {
         router.set_direct_route("Telegram".to_string(), "tg_123".to_string(), direct_agent);
 
         // Direct route wins
-        let resolved = router.resolve(&ChannelType::Telegram, "tg_123", Some("alice"));
+        let resolved = router.resolve(&ChannelType::Telegram, "tg_123", Some("alice"), &RequestContext::default());
         assert_eq!(resolved, Some(direct_agent));
 
         // User default for non-direct-routed user
-        let resolved = router.resolve(&ChannelType::WhatsApp, "wa_456", Some("alice"));
+        let resolved = router.resolve(&ChannelType::WhatsApp, "wa_456", Some("alice"), &RequestContext::default());
         assert_eq!(resolved, Some(user_agent));
 
         // System default for unknown user
-        let resolved = router.resolve(&ChannelType::Discord, "dc_789", None);
+        let resolved = router.resolve(&ChannelType::Discord, "dc_789", None, &RequestContext::default());
         assert_eq!(resolved, Some(default_agent));
     }
 
     #[test]
     fn test_no_route() {
         let router = AgentRouter::new();
-        let resolved = router.resolve(&ChannelType::CLI, "local", None);
+        let resolved = router.resolve(&ChannelType::CLI, "local", None, &RequestContext::default());
         assert_eq!(resolved, None);
     }
 
@@ -411,14 +457,17 @@ mod tests {
                 channel: Some("telegram".to_string()),
                 ..Default::default()
             },
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }]);
 
         // Should match telegram
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Telegram, "user1", None, &RequestContext::default());
         assert_eq!(resolved, Some(agent_id));
 
         // Should NOT match discord
-        let resolved = router.resolve(&ChannelType::Discord, "user1", None);
+        let resolved = router.resolve(&ChannelType::Discord, "user1", None, &RequestContext::default());
         assert_eq!(resolved, None);
     }
 
@@ -433,12 +482,15 @@ mod tests {
                 peer_id: Some("vip_user".to_string()),
                 ..Default::default()
             },
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }]);
 
-        let resolved = router.resolve(&ChannelType::Discord, "vip_user", None);
+        let resolved = router.resolve(&ChannelType::Discord, "vip_user", None, &RequestContext::default());
         assert_eq!(resolved, Some(agent_id));
 
-        let resolved = router.resolve(&ChannelType::Discord, "other_user", None);
+        let resolved = router.resolve(&ChannelType::Discord, "other_user", None, &RequestContext::default());
         assert_eq!(resolved, None);
     }
 
@@ -454,6 +506,9 @@ mod tests {
                 roles: vec!["admin".to_string()],
                 ..Default::default()
             },
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }]);
 
         let ctx = BindingContext {
@@ -463,7 +518,7 @@ mod tests {
             roles: vec!["admin".to_string(), "user".to_string()],
             ..Default::default()
         };
-        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx);
+        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx, &RequestContext::default());
         assert_eq!(resolved, Some(agent_id));
 
         // Wrong guild
@@ -474,7 +529,7 @@ mod tests {
             roles: vec!["admin".to_string()],
             ..Default::default()
         };
-        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx2);
+        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx2, &RequestContext::default());
         assert_eq!(resolved, None);
     }
 
@@ -494,6 +549,9 @@ mod tests {
                     channel: Some("discord".to_string()),
                     ..Default::default()
                 },
+                scope_tenants: vec![],
+                scope_groups: vec![],
+                scope_users: vec![],
             },
             AgentBinding {
                 agent: "specific".to_string(),
@@ -503,6 +561,9 @@ mod tests {
                     guild_id: Some("guild_1".to_string()),
                     ..Default::default()
                 },
+                scope_tenants: vec![],
+                scope_groups: vec![],
+                scope_users: vec![],
             },
         ]);
 
@@ -513,7 +574,7 @@ mod tests {
             guild_id: Some("guild_1".to_string()),
             ..Default::default()
         };
-        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx);
+        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx, &RequestContext::default());
         assert_eq!(resolved, Some(specific_id));
     }
 
@@ -533,6 +594,9 @@ mod tests {
         router.load_broadcast(BroadcastConfig {
             strategy: BroadcastStrategy::Parallel,
             routes,
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         });
 
         assert!(router.has_broadcast("vip_user"));
@@ -558,15 +622,15 @@ mod tests {
         router.set_channel_default("Discord".to_string(), discord_default);
 
         // Telegram should use Telegram-specific default
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Telegram, "user1", None, &RequestContext::default());
         assert_eq!(resolved, Some(telegram_default));
 
         // Discord should use Discord-specific default
-        let resolved = router.resolve(&ChannelType::Discord, "user1", None);
+        let resolved = router.resolve(&ChannelType::Discord, "user1", None, &RequestContext::default());
         assert_eq!(resolved, Some(discord_default));
 
         // WhatsApp has no channel default — falls to system default
-        let resolved = router.resolve(&ChannelType::WhatsApp, "user1", None);
+        let resolved = router.resolve(&ChannelType::WhatsApp, "user1", None, &RequestContext::default());
         assert_eq!(resolved, Some(system_default));
     }
 
@@ -578,7 +642,7 @@ mod tests {
         router.load_bindings(&[]);
 
         // Should fall through to system default
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Telegram, "user1", None, &RequestContext::default());
         assert_eq!(resolved, Some(default_id));
     }
 
@@ -592,9 +656,12 @@ mod tests {
                 channel: Some("telegram".to_string()),
                 ..Default::default()
             },
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }]);
 
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Telegram, "user1", None, &RequestContext::default());
         assert_eq!(resolved, None);
     }
 
@@ -612,12 +679,144 @@ mod tests {
                 channel: Some("slack".to_string()),
                 ..Default::default()
             },
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         });
         assert_eq!(router.bindings().len(), 1);
 
         let removed = router.remove_binding(0);
         assert!(removed.is_some());
         assert!(router.bindings().is_empty());
+    }
+
+    #[test]
+    fn test_binding_tenant_scope() {
+        let router = AgentRouter::new();
+        let acme_agent = AgentId::new();
+        router.register_agent("acme-bot".to_string(), acme_agent);
+        router.load_bindings(&[AgentBinding {
+            agent: "acme-bot".to_string(),
+            match_rule: Default::default(),
+            scope_tenants: vec!["acme".to_string()],
+            scope_groups: vec![],
+            scope_users: vec![],
+        }]);
+
+        let ctx_acme = RequestContext {
+            tenant_id: Some("acme".into()),
+            ..Default::default()
+        };
+        let ctx_other = RequestContext {
+            tenant_id: Some("other".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_acme),
+            Some(acme_agent)
+        );
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_other),
+            None
+        );
+    }
+
+    #[test]
+    fn test_binding_group_scope() {
+        let router = AgentRouter::new();
+        let eng_agent = AgentId::new();
+        router.register_agent("eng-bot".to_string(), eng_agent);
+        router.load_bindings(&[AgentBinding {
+            agent: "eng-bot".to_string(),
+            match_rule: Default::default(),
+            scope_tenants: vec![],
+            scope_groups: vec!["acme/engineering".to_string()],
+            scope_users: vec![],
+        }]);
+
+        let ctx_eng = RequestContext {
+            tenant_id: Some("acme".into()),
+            group_id: Some("engineering".into()),
+            ..Default::default()
+        };
+        let ctx_design = RequestContext {
+            tenant_id: Some("acme".into()),
+            group_id: Some("design".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_eng),
+            Some(eng_agent)
+        );
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_design),
+            None
+        );
+    }
+
+    #[test]
+    fn test_binding_user_scope() {
+        let router = AgentRouter::new();
+        let alice_agent = AgentId::new();
+        router.register_agent("alice-bot".to_string(), alice_agent);
+        router.load_bindings(&[AgentBinding {
+            agent: "alice-bot".to_string(),
+            match_rule: Default::default(),
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec!["alice-uuid".to_string()],
+        }]);
+
+        let ctx_alice = RequestContext {
+            user_id: Some("alice-uuid".into()),
+            ..Default::default()
+        };
+        let ctx_bob = RequestContext {
+            user_id: Some("bob-uuid".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_alice),
+            Some(alice_agent)
+        );
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_bob),
+            None
+        );
+    }
+
+    #[test]
+    fn test_global_binding_ignores_scope() {
+        let router = AgentRouter::new();
+        let global_agent = AgentId::new();
+        router.register_agent("global-bot".to_string(), global_agent);
+        router.load_bindings(&[AgentBinding {
+            agent: "global-bot".to_string(),
+            match_rule: Default::default(),
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
+        }]);
+
+        // Matches any context — empty scopes mean global
+        let ctx_any = RequestContext {
+            tenant_id: Some("whatever".into()),
+            group_id: Some("any-group".into()),
+            user_id: Some("any-user".into()),
+        };
+        let ctx_empty = RequestContext::default();
+
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_any),
+            Some(global_agent)
+        );
+        assert_eq!(
+            router.resolve(&ChannelType::Telegram, "u1", None, &ctx_empty),
+            Some(global_agent)
+        );
     }
 
     #[test]

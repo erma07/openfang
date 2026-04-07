@@ -170,6 +170,7 @@ pub fn build_entity(
         properties: deserialize_properties(props_str),
         created_at: parse_rfc3339_or_now(created_str),
         updated_at: parse_rfc3339_or_now(updated_str),
+        ctx: openfang_types::context::RequestContext::default(),
     }
 }
 
@@ -189,6 +190,7 @@ pub fn build_relation(
         properties: deserialize_properties(props_str),
         confidence: confidence as f32,
         created_at: parse_rfc3339_or_now(created_str),
+        ctx: openfang_types::context::RequestContext::default(),
     }
 }
 

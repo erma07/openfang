@@ -933,12 +933,14 @@ async fn parse_telegram_update(
         sender: ChannelUser {
             platform_id: chat_id.to_string(),
             display_name,
+            user_id: Some(user_id_str.clone()),
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp,
         is_group,
+        group_id: if is_group { Some(chat_id.to_string()) } else { None },
         thread_id,
         metadata,
     })

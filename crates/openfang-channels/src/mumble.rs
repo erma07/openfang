@@ -421,12 +421,14 @@ impl ChannelAdapter for MumbleAdapter {
                                         sender: ChannelUser {
                                             platform_id: format!("session-{actor}"),
                                             display_name: format!("user-{actor}"),
+                                            user_id: None,
                                             openfang_user: None,
                                         },
                                         content,
                                         target_agent: None,
                                         timestamp: Utc::now(),
                                         is_group: true,
+                                        group_id: None,
                                         thread_id: None,
                                         metadata: {
                                             let mut m = HashMap::new();

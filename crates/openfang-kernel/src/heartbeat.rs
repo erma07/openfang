@@ -335,6 +335,9 @@ mod tests {
                 exec_policy: None,
                 tool_allowlist: vec![],
                 tool_blocklist: vec![],
+                scope_tenants: vec![],
+                scope_groups: vec![],
+                scope_users: vec![],
             },
             state,
             mode: AgentMode::default(),
@@ -347,6 +350,8 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
+            owner_user_id: None,
         }
     }
 

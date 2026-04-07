@@ -48,6 +48,12 @@ pub struct MessageRequest {
     /// Sender display name.
     #[serde(default)]
     pub sender_name: Option<String>,
+    /// Tenant ID for multi-tenant isolation.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    /// Group/channel ID for shared conversations.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 /// Response from sending a message.

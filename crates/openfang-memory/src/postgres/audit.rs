@@ -51,6 +51,7 @@ fn compute_entry_hash(
 impl AuditBackend for PgAuditStore {
     fn append_entry(
         &self,
+        _ctx: &openfang_types::context::RequestContext,
         agent_id: &str,
         action: &str,
         detail: &str,

@@ -338,12 +338,14 @@ fn parse_line_event(event: &serde_json::Value) -> Option<ChannelMessage> {
         sender: ChannelUser {
             platform_id: reply_to,
             display_name: user_id,
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group,
+        group_id: None,
         thread_id: None,
         metadata,
     })

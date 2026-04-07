@@ -31,7 +31,7 @@ impl SessionStore {
             .lock()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT agent_id, messages, context_window_tokens, label FROM sessions WHERE id = ?1")
+            .prepare("SELECT agent_id, messages, context_window_tokens, label, tenant_id, user_id, group_id FROM sessions WHERE id = ?1")
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
 
         let result = stmt.query_row(rusqlite::params![session_id.0.to_string()], |row| {
@@ -39,16 +39,20 @@ impl SessionStore {
             let messages_blob: Vec<u8> = row.get(1)?;
             let tokens: i64 = row.get(2)?;
             let label: Option<String> = row.get(3).unwrap_or(None);
-            Ok((agent_str, messages_blob, tokens, label))
+            let tenant_id: Option<String> = row.get(4).unwrap_or(None);
+            let user_id: Option<String> = row.get(5).unwrap_or(None);
+            let group_id: Option<String> = row.get(6).unwrap_or(None);
+            Ok((agent_str, messages_blob, tokens, label, tenant_id, user_id, group_id))
         });
 
         match result {
-            Ok((agent_str, messages_blob, tokens, label)) => {
+            Ok((agent_str, messages_blob, tokens, label, tenant_id, user_id, group_id)) => {
                 let agent_id = helpers::parse_agent_id(&agent_str)?;
                 let messages: Vec<Message> = helpers::deserialize_messages(&messages_blob)?;
                 Ok(Some(Session {
                     id: session_id,
                     agent_id,
+                    ctx: openfang_types::context::RequestContext::new(tenant_id, user_id, group_id),
                     messages,
                     context_window_tokens: tokens as u64,
                     label,
@@ -68,15 +72,18 @@ impl SessionStore {
         let messages_blob = helpers::serialize_messages_named(&session.messages)?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
-             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, updated_at = ?6",
+            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, tenant_id, user_id, group_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, tenant_id = ?6, user_id = ?7, group_id = ?8, updated_at = ?9",
             rusqlite::params![
                 session.id.0.to_string(),
                 session.agent_id.0.to_string(),
                 messages_blob,
                 session.context_window_tokens as i64,
                 session.label.as_deref(),
+                session.ctx.tenant_id.as_deref(),
+                session.ctx.user_id.as_deref(),
+                session.ctx.group_id.as_deref(),
                 now,
             ],
         )
@@ -194,7 +201,7 @@ impl SessionStore {
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, messages, context_window_tokens, label FROM sessions \
+                "SELECT id, messages, context_window_tokens, label, tenant_id, user_id, group_id FROM sessions \
                  WHERE agent_id = ?1 AND label = ?2 LIMIT 1",
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -204,16 +211,20 @@ impl SessionStore {
             let messages_blob: Vec<u8> = row.get(1)?;
             let tokens: i64 = row.get(2)?;
             let lbl: Option<String> = row.get(3).unwrap_or(None);
-            Ok((id_str, messages_blob, tokens, lbl))
+            let tenant_id: Option<String> = row.get(4).unwrap_or(None);
+            let user_id: Option<String> = row.get(5).unwrap_or(None);
+            let group_id: Option<String> = row.get(6).unwrap_or(None);
+            Ok((id_str, messages_blob, tokens, lbl, tenant_id, user_id, group_id))
         });
 
         match result {
-            Ok((id_str, messages_blob, tokens, lbl)) => {
+            Ok((id_str, messages_blob, tokens, lbl, tenant_id, user_id, group_id)) => {
                 let session_id = helpers::parse_session_id(&id_str)?;
                 let messages: Vec<Message> = helpers::deserialize_messages(&messages_blob)?;
                 Ok(Some(Session {
                     id: session_id,
                     agent_id,
+                    ctx: openfang_types::context::RequestContext::new(tenant_id, user_id, group_id),
                     messages,
                     context_window_tokens: tokens as u64,
                     label: lbl,
@@ -272,7 +283,7 @@ impl SessionStore {
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
-                "SELECT messages, compaction_cursor, compacted_summary, updated_at \
+                "SELECT messages, compaction_cursor, compacted_summary, updated_at, tenant_id, user_id, group_id \
                  FROM canonical_sessions WHERE agent_id = ?1",
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -282,14 +293,18 @@ impl SessionStore {
             let cursor: i64 = row.get(1)?;
             let summary: Option<String> = row.get(2)?;
             let updated_at: String = row.get(3)?;
-            Ok((messages_blob, cursor, summary, updated_at))
+            let tenant_id: Option<String> = row.get(4).unwrap_or(None);
+            let user_id: Option<String> = row.get(5).unwrap_or(None);
+            let group_id: Option<String> = row.get(6).unwrap_or(None);
+            Ok((messages_blob, cursor, summary, updated_at, tenant_id, user_id, group_id))
         });
 
         match result {
-            Ok((messages_blob, cursor, summary, updated_at)) => {
+            Ok((messages_blob, cursor, summary, updated_at, tenant_id, user_id, group_id)) => {
                 let messages: Vec<Message> = helpers::deserialize_messages(&messages_blob)?;
                 Ok(CanonicalSession {
                     agent_id,
+                    ctx: openfang_types::context::RequestContext::new(tenant_id, user_id, group_id),
                     messages,
                     compaction_cursor: cursor as usize,
                     compacted_summary: summary,
@@ -300,6 +315,7 @@ impl SessionStore {
                 let now = Utc::now().to_rfc3339();
                 Ok(CanonicalSession {
                     agent_id,
+                    ctx: openfang_types::context::RequestContext::default(),
                     messages: Vec::new(),
                     compaction_cursor: 0,
                     compacted_summary: None,
@@ -318,15 +334,18 @@ impl SessionStore {
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let messages_blob = helpers::serialize_messages(&canonical.messages)?;
         conn.execute(
-            "INSERT INTO canonical_sessions (agent_id, messages, compaction_cursor, compacted_summary, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(agent_id) DO UPDATE SET messages = ?2, compaction_cursor = ?3, compacted_summary = ?4, updated_at = ?5",
+            "INSERT INTO canonical_sessions (agent_id, messages, compaction_cursor, compacted_summary, updated_at, tenant_id, user_id, group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(agent_id) DO UPDATE SET messages = ?2, compaction_cursor = ?3, compacted_summary = ?4, updated_at = ?5, tenant_id = ?6, user_id = ?7, group_id = ?8",
             rusqlite::params![
                 canonical.agent_id.0.to_string(),
                 messages_blob,
                 canonical.compaction_cursor as i64,
                 canonical.compacted_summary,
                 canonical.updated_at,
+                canonical.ctx.tenant_id,
+                canonical.ctx.user_id,
+                canonical.ctx.group_id,
             ],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -480,6 +499,7 @@ impl SessionBackend for SessionStore {
 mod tests {
     use super::*;
     use crate::sqlite::migration::run_migrations;
+    use openfang_types::context::RequestContext;
 
     fn setup() -> SessionStore {
         let conn = Connection::open_in_memory().unwrap();
@@ -491,7 +511,7 @@ mod tests {
     fn test_create_and_load_session() {
         let store = setup();
         let agent_id = AgentId::new();
-        let session = store.create_session(agent_id).unwrap();
+        let session = store.create_session(agent_id, &RequestContext::default()).unwrap();
 
         let loaded = store.get_session(session.id).unwrap().unwrap();
         assert_eq!(loaded.agent_id, agent_id);
@@ -502,7 +522,7 @@ mod tests {
     fn test_save_and_load_with_messages() {
         let store = setup();
         let agent_id = AgentId::new();
-        let mut session = store.create_session(agent_id).unwrap();
+        let mut session = store.create_session(agent_id, &RequestContext::default()).unwrap();
         session.messages.push(Message::user("Hello"));
         session.messages.push(Message::assistant("Hi there!"));
         store.save_session(&session).unwrap();
@@ -522,7 +542,7 @@ mod tests {
     fn test_delete_session() {
         let store = setup();
         let agent_id = AgentId::new();
-        let session = store.create_session(agent_id).unwrap();
+        let session = store.create_session(agent_id, &RequestContext::default()).unwrap();
         let sid = session.id;
         assert!(store.get_session(sid).unwrap().is_some());
         store.delete_session(sid).unwrap();
@@ -533,8 +553,8 @@ mod tests {
     fn test_delete_agent_sessions() {
         let store = setup();
         let agent_id = AgentId::new();
-        let s1 = store.create_session(agent_id).unwrap();
-        let s2 = store.create_session(agent_id).unwrap();
+        let s1 = store.create_session(agent_id, &RequestContext::default()).unwrap();
+        let s2 = store.create_session(agent_id, &RequestContext::default()).unwrap();
         assert!(store.get_session(s1.id).unwrap().is_some());
         assert!(store.get_session(s2.id).unwrap().is_some());
         store.delete_agent_sessions(agent_id).unwrap();
@@ -638,7 +658,7 @@ mod tests {
     fn test_jsonl_mirror_write() {
         let store = setup();
         let agent_id = AgentId::new();
-        let mut session = store.create_session(agent_id).unwrap();
+        let mut session = store.create_session(agent_id, &RequestContext::default()).unwrap();
         session
             .messages
             .push(openfang_types::message::Message::user("Hello"));

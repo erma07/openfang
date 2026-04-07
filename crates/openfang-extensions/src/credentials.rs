@@ -45,10 +45,22 @@ impl CredentialResolver {
     }
 
     /// Resolve a credential by key, trying all sources in order.
-    pub fn resolve(&self, key: &str) -> Option<Zeroizing<String>> {
-        // 1. Vault
+    ///
+    /// When `tenant_id` is provided, the vault is first checked for a
+    /// tenant-scoped key (`{tenant_id}/{key}`), then falls back to the
+    /// unscoped key. This isolates per-tenant secrets while keeping a
+    /// shared default for keys that haven't been overridden.
+    pub fn resolve(&self, key: &str, tenant_id: Option<&str>) -> Option<Zeroizing<String>> {
+        // 1. Vault (scoped key first, then unscoped fallback)
         if let Some(ref vault) = self.vault {
             if vault.is_unlocked() {
+                if let Some(tid) = tenant_id {
+                    let scoped_key = format!("{tid}/{key}");
+                    if let Some(val) = vault.get(&scoped_key) {
+                        debug!("Credential '{}' resolved from vault (tenant-scoped)", key);
+                        return Some(val);
+                    }
+                }
                 if let Some(val) = vault.get(key) {
                     debug!("Credential '{}' resolved from vault", key);
                     return Some(val);
@@ -80,11 +92,22 @@ impl CredentialResolver {
     }
 
     /// Check if a credential is available (without prompting).
-    pub fn has_credential(&self, key: &str) -> bool {
-        // Check vault
+    ///
+    /// When `tenant_id` is provided, also checks for the tenant-scoped
+    /// vault key (`{tenant_id}/{key}`).
+    pub fn has_credential(&self, key: &str, tenant_id: Option<&str>) -> bool {
+        // Check vault (scoped, then unscoped)
         if let Some(ref vault) = self.vault {
-            if vault.is_unlocked() && vault.get(key).is_some() {
-                return true;
+            if vault.is_unlocked() {
+                if let Some(tid) = tenant_id {
+                    let scoped_key = format!("{tid}/{key}");
+                    if vault.get(&scoped_key).is_some() {
+                        return true;
+                    }
+                }
+                if vault.get(key).is_some() {
+                    return true;
+                }
             }
         }
         // Check dotenv
@@ -97,10 +120,10 @@ impl CredentialResolver {
 
     /// Resolve all required credentials for an integration.
     /// Returns a map of env_var_name -> value for all resolved credentials.
-    pub fn resolve_all(&self, keys: &[&str]) -> HashMap<String, Zeroizing<String>> {
+    pub fn resolve_all(&self, keys: &[&str], tenant_id: Option<&str>) -> HashMap<String, Zeroizing<String>> {
         let mut result = HashMap::new();
         for key in keys {
-            if let Some(val) = self.resolve(key) {
+            if let Some(val) = self.resolve(key, tenant_id) {
                 result.insert(key.to_string(), val);
             }
         }
@@ -110,7 +133,7 @@ impl CredentialResolver {
     /// Check which credentials are missing.
     pub fn missing_credentials(&self, keys: &[&str]) -> Vec<String> {
         keys.iter()
-            .filter(|k| !self.has_credential(k))
+            .filter(|k| !self.has_credential(k, None))
             .map(|k| k.to_string())
             .collect()
     }
@@ -227,9 +250,9 @@ SINGLE_QUOTED='single'
     fn resolver_env_var() {
         std::env::set_var("TEST_CRED_RESOLVE_123", "from_env");
         let resolver = CredentialResolver::new(None, None);
-        let val = resolver.resolve("TEST_CRED_RESOLVE_123").unwrap();
+        let val = resolver.resolve("TEST_CRED_RESOLVE_123", None).unwrap();
         assert_eq!(val.as_str(), "from_env");
-        assert!(resolver.has_credential("TEST_CRED_RESOLVE_123"));
+        assert!(resolver.has_credential("TEST_CRED_RESOLVE_123", None));
         std::env::remove_var("TEST_CRED_RESOLVE_123");
     }
 
@@ -242,7 +265,7 @@ SINGLE_QUOTED='single'
         std::env::set_var("TEST_CRED_DOT_456", "from_env");
 
         let resolver = CredentialResolver::new(None, Some(&env_path));
-        let val = resolver.resolve("TEST_CRED_DOT_456").unwrap();
+        let val = resolver.resolve("TEST_CRED_DOT_456", None).unwrap();
         assert_eq!(val.as_str(), "from_dotenv"); // dotenv takes priority
 
         std::env::remove_var("TEST_CRED_DOT_456");
@@ -261,7 +284,7 @@ SINGLE_QUOTED='single'
         std::env::set_var("TEST_MULTI_B", "b_val");
 
         let resolver = CredentialResolver::new(None, None);
-        let resolved = resolver.resolve_all(&["TEST_MULTI_A", "TEST_MULTI_B", "TEST_MULTI_C"]);
+        let resolved = resolver.resolve_all(&["TEST_MULTI_A", "TEST_MULTI_B", "TEST_MULTI_C"], None);
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved["TEST_MULTI_A"].as_str(), "a_val");
         assert_eq!(resolved["TEST_MULTI_B"].as_str(), "b_val");

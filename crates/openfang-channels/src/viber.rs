@@ -286,12 +286,14 @@ fn parse_viber_event(event: &serde_json::Value) -> Option<ChannelMessage> {
         sender: ChannelUser {
             platform_id: sender_id,
             display_name: sender_name,
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group: false, // Viber bot API messages are always 1:1
+        group_id: None,
         thread_id: None,
         metadata,
     })

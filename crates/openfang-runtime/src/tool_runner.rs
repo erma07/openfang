@@ -124,6 +124,7 @@ pub async fn execute_tool(
     tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&openfang_types::config::DockerSandboxConfig>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> ToolResult {
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenFang name.
@@ -301,8 +302,8 @@ pub async fn execute_tool(
         "agent_kill" => tool_agent_kill(input, kernel),
 
         // Shared memory tools
-        "memory_store" => tool_memory_store(input, kernel),
-        "memory_recall" => tool_memory_recall(input, kernel),
+        "memory_store" => tool_memory_store(input, kernel, ctx),
+        "memory_recall" => tool_memory_recall(input, kernel, ctx),
 
         // Collaboration tools
         "agent_find" => tool_agent_find(input, kernel),
@@ -313,14 +314,14 @@ pub async fn execute_tool(
         "event_publish" => tool_event_publish(input, kernel).await,
 
         // Scheduling tools
-        "schedule_create" => tool_schedule_create(input, kernel).await,
-        "schedule_list" => tool_schedule_list(kernel).await,
-        "schedule_delete" => tool_schedule_delete(input, kernel).await,
+        "schedule_create" => tool_schedule_create(input, kernel, ctx).await,
+        "schedule_list" => tool_schedule_list(kernel, ctx).await,
+        "schedule_delete" => tool_schedule_delete(input, kernel, ctx).await,
 
         // Knowledge graph tools
-        "knowledge_add_entity" => tool_knowledge_add_entity(input, kernel).await,
-        "knowledge_add_relation" => tool_knowledge_add_relation(input, kernel).await,
-        "knowledge_query" => tool_knowledge_query(input, kernel).await,
+        "knowledge_add_entity" => tool_knowledge_add_entity(input, kernel, ctx).await,
+        "knowledge_add_relation" => tool_knowledge_add_relation(input, kernel, ctx).await,
+        "knowledge_query" => tool_knowledge_query(input, kernel, ctx).await,
 
         // Image analysis tool
         "image_analyze" => tool_image_analyze(input).await,
@@ -387,7 +388,7 @@ pub async fn execute_tool(
             match browser_ctx {
                 Some(mgr) => {
                     let aid = caller_agent_id.unwrap_or("default");
-                    crate::browser::tool_browser_navigate(input, mgr, aid).await
+                    crate::browser::tool_browser_navigate(input, mgr, aid, ctx.tenant_id.as_deref()).await
                 }
                 None => Err(
                     "Browser tools not available. Ensure Chrome/Chromium is installed.".to_string(),
@@ -397,7 +398,7 @@ pub async fn execute_tool(
         "browser_click" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_click(input, mgr, aid).await
+                crate::browser::tool_browser_click(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -406,7 +407,7 @@ pub async fn execute_tool(
         "browser_type" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_type(input, mgr, aid).await
+                crate::browser::tool_browser_type(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -415,7 +416,7 @@ pub async fn execute_tool(
         "browser_screenshot" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_screenshot(input, mgr, aid).await
+                crate::browser::tool_browser_screenshot(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -424,7 +425,7 @@ pub async fn execute_tool(
         "browser_read_page" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_read_page(input, mgr, aid).await
+                crate::browser::tool_browser_read_page(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -433,7 +434,7 @@ pub async fn execute_tool(
         "browser_close" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_close(input, mgr, aid).await
+                crate::browser::tool_browser_close(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -442,7 +443,7 @@ pub async fn execute_tool(
         "browser_scroll" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_scroll(input, mgr, aid).await
+                crate::browser::tool_browser_scroll(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -451,7 +452,7 @@ pub async fn execute_tool(
         "browser_wait" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_wait(input, mgr, aid).await
+                crate::browser::tool_browser_wait(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -460,7 +461,7 @@ pub async fn execute_tool(
         "browser_run_js" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_run_js(input, mgr, aid).await
+                crate::browser::tool_browser_run_js(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -469,7 +470,7 @@ pub async fn execute_tool(
         "browser_back" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_back(input, mgr, aid).await
+                crate::browser::tool_browser_back(input, mgr, aid, ctx.tenant_id.as_deref()).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -1703,21 +1704,23 @@ fn tool_agent_kill(
 fn tool_memory_store(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
     let value = input.get("value").ok_or("Missing 'value' parameter")?;
-    kh.memory_store(key, value.clone())?;
+    kh.memory_store(ctx, key, value.clone())?;
     Ok(format!("Stored value under key '{key}'."))
 }
 
 fn tool_memory_recall(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    match kh.memory_recall(key)? {
+    match kh.memory_recall(ctx, key)? {
         Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
     }
@@ -1868,6 +1871,7 @@ fn parse_relation_type(s: &str) -> openfang_types::memory::RelationType {
 async fn tool_knowledge_add_entity(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
@@ -1887,15 +1891,17 @@ async fn tool_knowledge_add_entity(
         properties,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        ctx: ctx.clone(),
     };
 
-    let id = kh.knowledge_add_entity(entity).await?;
+    let id = kh.knowledge_add_entity(ctx, entity).await?;
     Ok(format!("Entity '{name}' added with ID: {id}"))
 }
 
 async fn tool_knowledge_add_relation(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let source = input["source"]
@@ -1921,9 +1927,10 @@ async fn tool_knowledge_add_relation(
         properties,
         confidence,
         created_at: chrono::Utc::now(),
+        ctx: ctx.clone(),
     };
 
-    let id = kh.knowledge_add_relation(relation).await?;
+    let id = kh.knowledge_add_relation(ctx, relation).await?;
     Ok(format!(
         "Relation '{source}' --[{relation_str}]--> '{target}' added with ID: {id}"
     ))
@@ -1932,6 +1939,7 @@ async fn tool_knowledge_add_relation(
 async fn tool_knowledge_query(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let source = input["source"].as_str().map(|s| s.to_string());
@@ -1944,9 +1952,10 @@ async fn tool_knowledge_query(
         relation,
         target,
         max_depth,
+        tenant_id: None,
     };
 
-    let matches = kh.knowledge_query(pattern).await?;
+    let matches = kh.knowledge_query(ctx, pattern).await?;
     if matches.is_empty() {
         return Ok("No matching knowledge graph entries found.".to_string());
     }
@@ -2096,6 +2105,7 @@ const SCHEDULES_KEY: &str = "__openfang_schedules";
 async fn tool_schedule_create(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let description = input["description"]
@@ -2120,23 +2130,23 @@ async fn tool_schedule_create(
     });
 
     // Load existing schedules from shared memory
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(ctx, SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    kh.memory_store(SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(ctx, SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
     ))
 }
 
-async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, String> {
+async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>, ctx: &openfang_types::context::RequestContext) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
 
-    let schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
+    let schedules: Vec<serde_json::Value> = match kh.memory_recall(ctx, SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -2165,11 +2175,12 @@ async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<St
 async fn tool_schedule_delete(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
 
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(ctx, SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -2181,7 +2192,7 @@ async fn tool_schedule_delete(
         return Err(format!("Schedule '{id}' not found."));
     }
 
-    kh.memory_store(SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(ctx, SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 
@@ -3461,6 +3472,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(
@@ -3490,6 +3502,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3516,6 +3529,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3542,6 +3556,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3568,6 +3583,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         // web_search now attempts a real fetch; may succeed or fail depending on network
@@ -3594,6 +3610,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3620,6 +3637,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3647,6 +3665,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3678,6 +3697,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         // Should fail for file-not-found, NOT for permission denied
@@ -3723,6 +3743,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         // Should NOT be the capability-enforcement "Permission denied" — it should
@@ -3758,6 +3779,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3927,6 +3949,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);
@@ -3972,6 +3995,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            &openfang_types::context::RequestContext::default(),
         )
         .await;
         assert!(result.is_error);

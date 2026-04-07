@@ -632,12 +632,14 @@ impl FeishuAdapter {
                                                 sender: ChannelUser {
                                                     platform_id: chat_id,
                                                     display_name: open_id,
+                                                    user_id: None,
                                                     openfang_user: None,
                                                 },
                                                 content,
                                                 target_agent: None,
                                                 timestamp: Utc::now(),
                                                 is_group,
+                                                group_id: None,
                                                 thread_id: None,
                                                 metadata: HashMap::new(),
                                             };
@@ -1327,12 +1329,14 @@ fn parse_event(
         sender: ChannelUser {
             platform_id: chat_id,
             display_name: sender_id,
+            user_id: None,
             openfang_user: None,
         },
         content: msg_content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group,
+        group_id: None,
         thread_id: root_id,
         metadata,
     })

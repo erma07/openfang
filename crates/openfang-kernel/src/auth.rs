@@ -5,7 +5,7 @@
 
 use dashmap::DashMap;
 use openfang_types::agent::UserId;
-use openfang_types::config::UserConfig;
+use openfang_types::config::{GroupConfig, UserConfig};
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use std::fmt;
 use tracing::info;
@@ -95,19 +95,30 @@ pub struct UserIdentity {
 }
 
 /// RBAC authentication and authorization manager.
+///
+/// NOTE: This module is fully implemented and tested but not yet wired into
+/// kernel request paths. To enable authorization, inject `AuthManager` checks
+/// into `Kernel::send_message_with_handle_and_blocks` and other mutating
+/// methods. See the commented-out example in `kernel.rs`.
 pub struct AuthManager {
     /// Known users by their OpenFang user ID.
     users: DashMap<UserId, UserIdentity>,
     /// Channel binding index: "channel_type:platform_id" → UserId.
     channel_index: DashMap<String, UserId>,
+    /// User → tenant_id mapping.
+    user_tenant: DashMap<UserId, String>,
+    /// Group channel binding index: "channel_type:platform_id" → group_id.
+    group_channel_index: DashMap<String, String>,
 }
 
 impl AuthManager {
-    /// Create a new AuthManager from kernel user configuration.
-    pub fn new(user_configs: &[UserConfig]) -> Self {
+    /// Create a new AuthManager from kernel user and group configuration.
+    pub fn new(user_configs: &[UserConfig], group_configs: &[GroupConfig]) -> Self {
         let manager = Self {
             users: DashMap::new(),
             channel_index: DashMap::new(),
+            user_tenant: DashMap::new(),
+            group_channel_index: DashMap::new(),
         };
 
         for config in user_configs {
@@ -127,11 +138,29 @@ impl AuthManager {
                 manager.channel_index.insert(key, user_id);
             }
 
+            // Store tenant mapping
+            if let Some(ref tenant_id) = config.tenant_id {
+                manager.user_tenant.insert(user_id, tenant_id.clone());
+            }
+
             info!(
                 user = %config.name,
                 role = %role,
                 bindings = config.channel_bindings.len(),
                 "Registered user"
+            );
+        }
+
+        // Index group channel bindings
+        for group in group_configs {
+            for (channel_type, platform_id) in &group.channel_bindings {
+                let key = format!("{channel_type}:{platform_id}");
+                manager.group_channel_index.insert(key, group.id.clone());
+            }
+            info!(
+                group = %group.name,
+                bindings = group.channel_bindings.len(),
+                "Registered group"
             );
         }
 
@@ -172,6 +201,17 @@ impl AuthManager {
         }
     }
 
+    /// Get a user's tenant ID.
+    pub fn user_tenant(&self, user_id: UserId) -> Option<String> {
+        self.user_tenant.get(&user_id).map(|r| r.value().clone())
+    }
+
+    /// Identify a group from a channel identity.
+    pub fn identify_group(&self, channel_type: &str, platform_group_id: &str) -> Option<String> {
+        let key = format!("{channel_type}:{platform_group_id}");
+        self.group_channel_index.get(&key).map(|r| r.value().clone())
+    }
+
     /// Check if RBAC is configured (any users registered).
     pub fn is_enabled(&self) -> bool {
         !self.users.is_empty()
@@ -205,6 +245,7 @@ mod tests {
                     m
                 },
                 api_key_hash: None,
+                tenant_id: None,
             },
             UserConfig {
                 name: "Guest".to_string(),
@@ -215,26 +256,28 @@ mod tests {
                     m
                 },
                 api_key_hash: None,
+                tenant_id: None,
             },
             UserConfig {
                 name: "ReadOnly".to_string(),
                 role: "viewer".to_string(),
                 channel_bindings: HashMap::new(),
                 api_key_hash: None,
+                tenant_id: None,
             },
         ]
     }
 
     #[test]
     fn test_user_registration() {
-        let manager = AuthManager::new(&test_configs());
+        let manager = AuthManager::new(&test_configs(), &[]);
         assert!(manager.is_enabled());
         assert_eq!(manager.user_count(), 3);
     }
 
     #[test]
     fn test_identify_from_channel() {
-        let manager = AuthManager::new(&test_configs());
+        let manager = AuthManager::new(&test_configs(), &[]);
 
         // Alice on Telegram
         let owner_tg = manager.identify("telegram", "123456");
@@ -253,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_owner_can_do_everything() {
-        let manager = AuthManager::new(&test_configs());
+        let manager = AuthManager::new(&test_configs(), &[]);
         let owner_id = manager.identify("telegram", "123456").unwrap();
 
         assert!(manager.authorize(owner_id, &Action::ChatWithAgent).is_ok());
@@ -265,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_user_limited_access() {
-        let manager = AuthManager::new(&test_configs());
+        let manager = AuthManager::new(&test_configs(), &[]);
         let guest_id = manager.identify("telegram", "999999").unwrap();
 
         // User can chat and view config
@@ -280,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_viewer_read_only() {
-        let manager = AuthManager::new(&test_configs());
+        let manager = AuthManager::new(&test_configs(), &[]);
         let users = manager.list_users();
         let viewer = users.iter().find(|u| u.name == "ReadOnly").unwrap();
 
@@ -292,16 +335,77 @@ mod tests {
 
     #[test]
     fn test_unknown_user_denied() {
-        let manager = AuthManager::new(&test_configs());
+        let manager = AuthManager::new(&test_configs(), &[]);
         let fake_id = UserId::new();
         assert!(manager.authorize(fake_id, &Action::ChatWithAgent).is_err());
     }
 
     #[test]
     fn test_no_users_means_disabled() {
-        let manager = AuthManager::new(&[]);
+        let manager = AuthManager::new(&[], &[]);
         assert!(!manager.is_enabled());
         assert_eq!(manager.user_count(), 0);
+    }
+
+    #[test]
+    fn test_tenant_resolution() {
+        let auth = AuthManager::new(
+            &[UserConfig {
+                name: "alice".to_string(),
+                role: "owner".to_string(),
+                channel_bindings: {
+                    let mut m = HashMap::new();
+                    m.insert("telegram".to_string(), "42".to_string());
+                    m
+                },
+                api_key_hash: None,
+                tenant_id: Some("acme".to_string()),
+            }],
+            &[GroupConfig {
+                id: "eng".to_string(),
+                name: "Engineering".to_string(),
+                tenant_id: Some("acme".to_string()),
+                channel_bindings: {
+                    let mut m = HashMap::new();
+                    m.insert("discord".to_string(), "guild123".to_string());
+                    m
+                },
+            }],
+        );
+
+        // Identify user by channel
+        let uid = auth.identify("telegram", "42").expect("should find alice");
+
+        // Check tenant mapping
+        assert_eq!(auth.user_tenant(uid), Some("acme".to_string()));
+
+        // Check group mapping
+        assert_eq!(
+            auth.identify_group("discord", "guild123"),
+            Some("eng".to_string())
+        );
+
+        // Unknown channel → None
+        assert!(auth.identify("telegram", "9999").is_none());
+        assert!(auth.identify_group("discord", "unknown").is_none());
+    }
+
+    #[test]
+    fn test_is_enabled() {
+        let empty = AuthManager::new(&[], &[]);
+        assert!(!empty.is_enabled());
+
+        let with_user = AuthManager::new(
+            &[UserConfig {
+                name: "a".to_string(),
+                role: "user".to_string(),
+                channel_bindings: HashMap::new(),
+                api_key_hash: None,
+                tenant_id: None,
+            }],
+            &[],
+        );
+        assert!(with_user.is_enabled());
     }
 
     #[test]

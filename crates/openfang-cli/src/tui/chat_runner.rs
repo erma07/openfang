@@ -344,7 +344,7 @@ impl StandaloneChat {
                     }
                     Backend::InProcess { kernel } => {
                         if let Some(id) = self.agent_id_inprocess {
-                            match kernel.kill_agent(id) {
+                            match kernel.kill_agent(id, &openfang_types::context::RequestContext::default()) {
                                 Ok(()) => {
                                     self.chat.push_message(
                                         Role::System,

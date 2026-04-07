@@ -155,6 +155,33 @@ pub struct UserConfig {
     /// Optional API key hash for API authentication.
     #[serde(default)]
     pub api_key_hash: Option<String>,
+    /// Tenant this user belongs to.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+}
+
+/// Tenant configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantConfig {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub default_agent: Option<String>,
+    #[serde(default)]
+    pub max_daily_usd: Option<f64>,
+    #[serde(default)]
+    pub max_monthly_usd: Option<f64>,
+}
+
+/// Group configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupConfig {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    #[serde(default)]
+    pub channel_bindings: HashMap<String, String>,
 }
 
 fn default_role() -> String {
@@ -418,6 +445,12 @@ pub struct WebhookTriggerConfig {
     pub max_payload_bytes: usize,
     /// Rate limit: max requests per minute per IP. Default: 30.
     pub rate_limit_per_minute: u32,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 impl Default for WebhookTriggerConfig {
@@ -427,6 +460,9 @@ impl Default for WebhookTriggerConfig {
             token_env: "OPENFANG_WEBHOOK_TOKEN".to_string(),
             max_payload_bytes: 65536,
             rate_limit_per_minute: 30,
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }
     }
 }
@@ -699,6 +735,12 @@ pub struct AgentBinding {
     pub agent: String,
     /// Match criteria (all specified fields must match).
     pub match_rule: BindingMatchRule,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 /// Match rule for agent bindings. All specified (non-None) fields must match.
@@ -749,6 +791,12 @@ pub struct BroadcastConfig {
     pub strategy: BroadcastStrategy,
     /// Map of peer_id -> list of agent names to receive the message.
     pub routes: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 /// Broadcast delivery strategy.
@@ -774,6 +822,12 @@ pub struct AutoReplyConfig {
     pub timeout_secs: u64,
     /// Patterns that suppress auto-reply (e.g., "/stop", "/pause").
     pub suppress_patterns: Vec<String>,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 impl Default for AutoReplyConfig {
@@ -783,6 +837,9 @@ impl Default for AutoReplyConfig {
             max_concurrent: 3,
             timeout_secs: 120,
             suppress_patterns: vec!["/stop".to_string(), "/pause".to_string()],
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }
     }
 }
@@ -845,6 +902,12 @@ pub struct ExecPolicy {
     /// produce no stdout/stderr output for this duration. Default: 30.
     #[serde(default = "default_no_output_timeout")]
     pub no_output_timeout_secs: u64,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 fn default_no_output_timeout() -> u64 {
@@ -866,6 +929,9 @@ impl Default for ExecPolicy {
             timeout_secs: 30,
             max_output_bytes: 100 * 1024,
             no_output_timeout_secs: default_no_output_timeout(),
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }
     }
 }
@@ -1023,6 +1089,15 @@ pub struct KernelConfig {
     /// User configurations for RBAC multi-user support.
     #[serde(default)]
     pub users: Vec<UserConfig>,
+    /// Tenant configurations for multi-tenant deployments.
+    #[serde(default)]
+    pub tenants: Vec<TenantConfig>,
+    /// Group configurations for shared conversations.
+    #[serde(default)]
+    pub groups: Vec<GroupConfig>,
+    /// Default tenant ID for single-tenant deployments.
+    #[serde(default)]
+    pub default_tenant_id: Option<String>,
     /// MCP server configurations for external tool integration.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfigEntry>,
@@ -1218,6 +1293,12 @@ pub struct BudgetConfig {
     /// will be overridden to this value. Set to 0 to keep each agent's own limit.
     /// Use this to globally raise or lower the token budget for all agents.
     pub default_max_llm_tokens_per_hour: u64,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 impl Default for BudgetConfig {
@@ -1228,6 +1309,9 @@ impl Default for BudgetConfig {
             max_monthly_usd: 0.0,
             alert_threshold: 0.8,
             default_max_llm_tokens_per_hour: 0,
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }
     }
 }
@@ -1256,6 +1340,12 @@ pub struct McpServerConfigEntry {
     /// Each entry is `"Header-Name: value"` (e.g., `"Authorization: Bearer <token>"`).
     #[serde(default)]
     pub headers: Vec<String>,
+    #[serde(default)]
+    pub scope_tenants: Vec<String>,
+    #[serde(default)]
+    pub scope_groups: Vec<String>,
+    #[serde(default)]
+    pub scope_users: Vec<String>,
 }
 
 fn default_mcp_timeout() -> u64 {
@@ -1334,6 +1424,9 @@ impl Default for KernelConfig {
             mode: KernelMode::default(),
             language: "en".to_string(),
             users: Vec::new(),
+            tenants: Vec::new(),
+            groups: Vec::new(),
+            default_tenant_id: None,
             mcp_servers: Vec::new(),
             a2a: None,
             usage_footer: UsageFooterMode::default(),
@@ -3811,6 +3904,7 @@ mod tests {
                 m
             },
             api_key_hash: None,
+            tenant_id: None,
         };
         let json = serde_json::to_string(&uc).unwrap();
         let back: UserConfig = serde_json::from_str(&json).unwrap();

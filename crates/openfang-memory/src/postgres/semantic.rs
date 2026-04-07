@@ -38,6 +38,7 @@ impl SemanticBackend for PgSemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<MemoryId> {
         let id = MemoryId::new();
         let source_str = helpers::serialize_source(&source)?;
@@ -45,14 +46,17 @@ impl SemanticBackend for PgSemanticStore {
         let vec_embedding = embedding.map(|e| Vector::from(e.to_vec()));
         let content = content.to_string();
         let scope = scope.to_string();
+        let tenant_id = ctx.tenant_id.clone();
+        let user_id = ctx.user_id.clone();
+        let group_id = ctx.group_id.clone();
 
         self.block_on_pg(async {
             let client = self.pool.get().await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             client
                 .execute(
-                    "INSERT INTO memories (id, agent_id, content, source, scope, confidence, metadata, embedding, created_at, accessed_at, access_count, deleted)
-                     VALUES ($1, $2, $3, $4, $5, 1.0, $6, $7, NOW(), NOW(), 0, FALSE)",
+                    "INSERT INTO memories (id, agent_id, content, source, scope, confidence, metadata, embedding, created_at, accessed_at, access_count, deleted, tenant_id, user_id, group_id)
+                     VALUES ($1, $2, $3, $4, $5, 1.0, $6, $7, NOW(), NOW(), 0, FALSE, $8, $9, $10)",
                     &[
                         &id.0.to_string(),
                         &agent_id.0.to_string(),
@@ -61,6 +65,9 @@ impl SemanticBackend for PgSemanticStore {
                         &scope,
                         &meta_str,
                         &vec_embedding,
+                        &tenant_id,
+                        &user_id,
+                        &group_id,
                     ],
                 )
                 .await
@@ -101,6 +108,21 @@ impl SemanticBackend for PgSemanticStore {
                 if let Some(min_conf) = f.min_confidence {
                     conditions.push(format!("confidence >= ${param_idx}"));
                     params.push(Box::new(min_conf as f64));
+                    param_idx += 1;
+                }
+                if let Some(ref tenant_id) = f.tenant_id {
+                    conditions.push(format!("tenant_id = ${param_idx}"));
+                    params.push(Box::new(tenant_id.clone()));
+                    param_idx += 1;
+                }
+                if let Some(ref user_id) = f.user_id {
+                    conditions.push(format!("user_id = ${param_idx}"));
+                    params.push(Box::new(user_id.clone()));
+                    param_idx += 1;
+                }
+                if let Some(ref group_id) = f.group_id {
+                    conditions.push(format!("group_id = ${param_idx}"));
+                    params.push(Box::new(group_id.clone()));
                     param_idx += 1;
                 }
             }
@@ -173,6 +195,7 @@ impl SemanticBackend for PgSemanticStore {
                     id, agent_id, content, embedding: None, metadata, source,
                     confidence, created_at, accessed_at,
                     access_count: access_count as u64, scope,
+                    ctx: openfang_types::context::RequestContext::default(),
                 });
 
                 // Update access count

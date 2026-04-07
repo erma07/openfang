@@ -43,6 +43,16 @@ pub async fn request_logging(request: Request<Body>, next: Next) -> Response<Bod
     response
 }
 
+/// Authenticated user identity inserted into request extensions by the auth middleware.
+///
+/// Route handlers can extract this via `request.extensions().get::<AuthenticatedUser>()`
+/// to build a [`RequestContext`] with the caller's identity.
+#[derive(Clone, Debug)]
+pub struct AuthenticatedUser {
+    /// The username from a session cookie, or "api-key" for bearer token auth.
+    pub username: String,
+}
+
 /// Authentication state passed to the auth middleware.
 #[derive(Clone)]
 pub struct AuthState {
@@ -61,7 +71,7 @@ pub struct AuthState {
 /// When dashboard auth is enabled, session cookies are also accepted.
 pub async fn auth(
     axum::extract::State(auth_state): axum::extract::State<AuthState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
     // SECURITY: Capture method early for method-aware public endpoint checks.
@@ -184,15 +194,19 @@ pub async fn auth(
 
     // Accept if either auth method matches
     if header_auth == Some(true) || query_auth == Some(true) {
+        request.extensions_mut().insert(AuthenticatedUser {
+            username: "api-key".to_string(),
+        });
         return next.run(request).await;
     }
 
     // Check session cookie (dashboard login sessions)
     if auth_state.auth_enabled {
         if let Some(token) = extract_session_cookie(&request) {
-            if crate::session_auth::verify_session_token(&token, &auth_state.session_secret)
-                .is_some()
+            if let Some(username) =
+                crate::session_auth::verify_session_token(&token, &auth_state.session_secret)
             {
+                request.extensions_mut().insert(AuthenticatedUser { username });
                 return next.run(request).await;
             }
         }

@@ -15,6 +15,7 @@ use futures::StreamExt;
 use openfang_types::agent::AgentId;
 use openfang_types::approval::ApprovalRequest;
 use openfang_types::config::{ChannelOverrides, DmPolicy, GroupPolicy, OutputFormat};
+use openfang_types::context::RequestContext;
 use openfang_types::message::ContentBlock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -161,7 +162,7 @@ pub trait ChannelBridgeHandle: Send + Sync {
     }
 
     /// Reset an agent's session (clear messages, fresh session ID).
-    async fn reset_session(&self, _agent_id: AgentId) -> Result<String, String> {
+    async fn reset_session(&self, _agent_id: AgentId, _ctx: &openfang_types::context::RequestContext) -> Result<String, String> {
         Err("Not implemented".to_string())
     }
 
@@ -171,7 +172,7 @@ pub trait ChannelBridgeHandle: Send + Sync {
     }
 
     /// Set an agent's model.
-    async fn set_model(&self, _agent_id: AgentId, _model: &str) -> Result<String, String> {
+    async fn set_model(&self, _agent_id: AgentId, _model: &str, _ctx: &openfang_types::context::RequestContext) -> Result<String, String> {
         Err("Not implemented".to_string())
     }
 
@@ -717,7 +718,12 @@ async fn dispatch_message(
 
     // Handle commands first (early return)
     if let ChannelContent::Command { ref name, ref args } = message.content {
-        let result = handle_command(name, args, handle, router, &message.sender).await;
+        let cmd_ctx = RequestContext {
+            tenant_id: None,
+            user_id: message.sender.user_id.clone(),
+            group_id: message.group_id.clone(),
+        };
+        let result = handle_command(name, args, handle, router, &message.sender, &cmd_ctx).await;
         send_response(adapter, &message.sender, result, thread_id, output_format).await;
         return;
     }
@@ -796,7 +802,12 @@ async fn dispatch_message(
         };
 
         if is_channel_command(cmd) {
-            let result = handle_command(cmd, &args, handle, router, &message.sender).await;
+            let cmd_ctx = RequestContext {
+                tenant_id: None,
+                user_id: message.sender.user_id.clone(),
+                group_id: message.group_id.clone(),
+            };
+            let result = handle_command(cmd, &args, handle, router, &message.sender, &cmd_ctx).await;
             send_response(adapter, &message.sender, result, thread_id, output_format).await;
             return;
         }
@@ -874,10 +885,16 @@ async fn dispatch_message(
     }
 
     // Route to agent (standard path)
+    let ctx = RequestContext {
+        tenant_id: None,
+        user_id: message.sender.user_id.clone(),
+        group_id: message.group_id.clone(),
+    };
     let agent_id = router.resolve(
         &message.channel,
         &message.sender.platform_id,
         message.sender.openfang_user.as_deref(),
+        &ctx,
     );
 
     let agent_id = match agent_id {
@@ -1308,10 +1325,16 @@ async fn dispatch_with_blocks(
     lifecycle_reactions: bool,
 ) {
     // Route to agent (same logic as text path)
+    let ctx = RequestContext {
+        tenant_id: None,
+        user_id: message.sender.user_id.clone(),
+        group_id: message.group_id.clone(),
+    };
     let agent_id = router.resolve(
         &message.channel,
         &message.sender.platform_id,
         message.sender.openfang_user.as_deref(),
+        &ctx,
     );
 
     let agent_id = match agent_id {
@@ -1502,6 +1525,7 @@ async fn handle_command(
     handle: &Arc<dyn ChannelBridgeHandle>,
     router: &Arc<AgentRouter>,
     sender: &ChannelUser,
+    ctx: &RequestContext,
 ) -> String {
     match name {
         "start" => {
@@ -1571,10 +1595,11 @@ async fn handle_command(
                 &crate::types::ChannelType::CLI,
                 &sender.platform_id,
                 sender.openfang_user.as_deref(),
+                ctx,
             );
             match agent_id {
                 Some(aid) => handle
-                    .reset_session(aid)
+                    .reset_session(aid, ctx)
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}")),
                 None => "No agent selected. Use /agent <name> first.".to_string(),
@@ -1585,6 +1610,7 @@ async fn handle_command(
                 &crate::types::ChannelType::CLI,
                 &sender.platform_id,
                 sender.openfang_user.as_deref(),
+                ctx,
             );
             match agent_id {
                 Some(aid) => handle
@@ -1599,18 +1625,19 @@ async fn handle_command(
                 &crate::types::ChannelType::CLI,
                 &sender.platform_id,
                 sender.openfang_user.as_deref(),
+                ctx,
             );
             match agent_id {
                 Some(aid) => {
                     if args.is_empty() {
                         // Show current model
                         handle
-                            .set_model(aid, "")
+                            .set_model(aid, "", ctx)
                             .await
                             .unwrap_or_else(|e| format!("Error: {e}"))
                     } else {
                         handle
-                            .set_model(aid, &args[0])
+                            .set_model(aid, &args[0], ctx)
                             .await
                             .unwrap_or_else(|e| format!("Error: {e}"))
                     }
@@ -1623,6 +1650,7 @@ async fn handle_command(
                 &crate::types::ChannelType::CLI,
                 &sender.platform_id,
                 sender.openfang_user.as_deref(),
+                ctx,
             );
             match agent_id {
                 Some(aid) => handle
@@ -1637,6 +1665,7 @@ async fn handle_command(
                 &crate::types::ChannelType::CLI,
                 &sender.platform_id,
                 sender.openfang_user.as_deref(),
+                ctx,
             );
             match agent_id {
                 Some(aid) => handle
@@ -1651,6 +1680,7 @@ async fn handle_command(
                 &crate::types::ChannelType::CLI,
                 &sender.platform_id,
                 sender.openfang_user.as_deref(),
+                ctx,
             );
             match agent_id {
                 Some(aid) => {
@@ -1741,6 +1771,7 @@ async fn handle_command(
 mod tests {
     use super::*;
     use crate::types::ChannelType;
+    use openfang_types::context::RequestContext;
     use std::sync::Mutex;
 
     /// Mock kernel handle for testing.
@@ -1812,13 +1843,14 @@ mod tests {
         let sender = ChannelUser {
             platform_id: "user1".to_string(),
             display_name: "Test".to_string(),
+            user_id: None,
             openfang_user: None,
         };
 
-        let result = handle_command("agents", &[], &handle, &router, &sender).await;
+        let result = handle_command("agents", &[], &handle, &router, &sender, &RequestContext::default()).await;
         assert!(result.contains("coder"));
 
-        let result = handle_command("help", &[], &handle, &router, &sender).await;
+        let result = handle_command("help", &[], &handle, &router, &sender, &RequestContext::default()).await;
         assert!(result.contains("/agents"));
     }
 
@@ -1832,16 +1864,17 @@ mod tests {
         let sender = ChannelUser {
             platform_id: "user1".to_string(),
             display_name: "Test".to_string(),
+            user_id: None,
             openfang_user: None,
         };
 
         // Select existing agent
         let result =
-            handle_command("agent", &["coder".to_string()], &handle, &router, &sender).await;
+            handle_command("agent", &["coder".to_string()], &handle, &router, &sender, &RequestContext::default()).await;
         assert!(result.contains("Now talking to agent: coder"));
 
         // Verify router was updated
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Telegram, "user1", None, &RequestContext::default());
         assert_eq!(resolved, Some(agent_id));
     }
 
@@ -1855,10 +1888,11 @@ mod tests {
         let sender = ChannelUser {
             platform_id: "user1".to_string(),
             display_name: "Test".to_string(),
+            user_id: None,
             openfang_user: None,
         };
 
-        let result = handle_command("agent", &[], &handle, &router, &sender).await;
+        let result = handle_command("agent", &[], &handle, &router, &sender, &RequestContext::default()).await;
         assert!(result.contains("Usage: /agent <name>"));
         assert!(result.contains("coder"));
     }

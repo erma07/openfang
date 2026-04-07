@@ -682,9 +682,9 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         }
     }
 
-    async fn reset_session(&self, agent_id: AgentId) -> Result<String, String> {
+    async fn reset_session(&self, agent_id: AgentId, ctx: &openfang_types::context::RequestContext) -> Result<String, String> {
         self.kernel
-            .reset_session(agent_id)
+            .reset_session(agent_id, ctx)
             .map_err(|e| format!("{e}"))?;
         Ok("Session reset. Chat history cleared.".to_string())
     }
@@ -696,7 +696,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             .map_err(|e| format!("{e}"))
     }
 
-    async fn set_model(&self, agent_id: AgentId, model: &str) -> Result<String, String> {
+    async fn set_model(&self, agent_id: AgentId, model: &str, ctx: &openfang_types::context::RequestContext) -> Result<String, String> {
         if model.is_empty() {
             // Show current model
             let entry = self
@@ -710,7 +710,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             ));
         }
         self.kernel
-            .set_agent_model(agent_id, model, None)
+            .set_agent_model(agent_id, model, None, ctx)
             .map_err(|e| format!("{e}"))?;
         // Read back resolved model+provider from registry
         let entry = self

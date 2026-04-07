@@ -245,12 +245,14 @@ impl ChannelAdapter for TwitchAdapter {
                             sender: ChannelUser {
                                 platform_id: channel.clone(),
                                 display_name: sender_nick,
+                                user_id: None,
                                 openfang_user: None,
                             },
                             content: msg_content,
                             target_agent: None,
                             timestamp: Utc::now(),
                             is_group: true, // Twitch channels are always group
+                            group_id: None,
                             thread_id: None,
                             metadata: HashMap::new(),
                         };

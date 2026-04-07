@@ -26,7 +26,7 @@ impl PgKnowledgeStore {
 }
 
 impl KnowledgeBackend for PgKnowledgeStore {
-    fn add_entity(&self, entity: Entity) -> OpenFangResult<String> {
+    fn add_entity(&self, entity: Entity, ctx: &openfang_types::context::RequestContext) -> OpenFangResult<String> {
         let id = helpers::entity_id_or_generate(&entity.id);
         let entity_type_str = helpers::serialize_entity_type(&entity.entity_type)?;
         let props_json = serde_json::to_value(&entity.properties)
@@ -37,10 +37,10 @@ impl KnowledgeBackend for PgKnowledgeStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             client
                 .execute(
-                    "INSERT INTO entities (id, entity_type, name, properties, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, NOW(), NOW())
+                    "INSERT INTO entities (id, entity_type, name, properties, created_at, updated_at, tenant_id, user_id, group_id)
+                     VALUES ($1, $2, $3, $4, NOW(), NOW(), $5, $6, $7)
                      ON CONFLICT (id) DO UPDATE SET name = $3, properties = $4, updated_at = NOW()",
-                    &[&id, &entity_type_str, &entity.name, &props_json],
+                    &[&id, &entity_type_str, &entity.name, &props_json, &ctx.tenant_id, &ctx.user_id, &ctx.group_id],
                 )
                 .await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -48,7 +48,7 @@ impl KnowledgeBackend for PgKnowledgeStore {
         })
     }
 
-    fn add_relation(&self, relation: Relation) -> OpenFangResult<String> {
+    fn add_relation(&self, relation: Relation, ctx: &openfang_types::context::RequestContext) -> OpenFangResult<String> {
         let id = helpers::new_relation_id();
         let rel_type_str = helpers::serialize_relation_type(&relation.relation)?;
         let props_json = serde_json::to_value(&relation.properties)
@@ -59,9 +59,9 @@ impl KnowledgeBackend for PgKnowledgeStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             client
                 .execute(
-                    "INSERT INTO relations (id, source_entity, relation_type, target_entity, properties, confidence, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, NOW())",
-                    &[&id, &relation.source, &rel_type_str, &relation.target, &props_json, &relation.confidence],
+                    "INSERT INTO relations (id, source_entity, relation_type, target_entity, properties, confidence, created_at, tenant_id, user_id, group_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)",
+                    &[&id, &relation.source, &rel_type_str, &relation.target, &props_json, &relation.confidence, &ctx.tenant_id, &ctx.user_id, &ctx.group_id],
                 )
                 .await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -69,7 +69,7 @@ impl KnowledgeBackend for PgKnowledgeStore {
         })
     }
 
-    fn query_graph(&self, pattern: GraphPattern) -> OpenFangResult<Vec<GraphMatch>> {
+    fn query_graph(&self, pattern: GraphPattern, ctx: &openfang_types::context::RequestContext) -> OpenFangResult<Vec<GraphMatch>> {
         self.block_on_pg(async {
             let client = self.pool.get().await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -92,6 +92,11 @@ impl KnowledgeBackend for PgKnowledgeStore {
             if let Some(ref target) = pattern.target {
                 conditions.push(format!("(t.id = ${idx} OR t.name = ${idx})"));
                 params.push(Box::new(target.clone()));
+                idx += 1;
+            }
+            if let Some(ref tenant_id) = ctx.tenant_id {
+                conditions.push(format!("r.tenant_id = ${idx}"));
+                params.push(Box::new(tenant_id.clone()));
                 idx += 1;
             }
             let _ = idx;

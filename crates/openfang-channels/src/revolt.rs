@@ -285,12 +285,14 @@ fn parse_revolt_message(
         sender: ChannelUser {
             platform_id: channel_id,
             display_name: author.to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content: msg_content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group: true, // Revolt channels are inherently group-based
+        group_id: None,
         thread_id: None,
         metadata,
     })

@@ -192,6 +192,7 @@ pub async fn run_agent_loop(
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> OpenFangResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -213,6 +214,9 @@ pub async fn run_agent_loop(
                         5,
                         Some(MemoryFilter {
                             agent_id: Some(session.agent_id),
+                            tenant_id: ctx.tenant_id.clone(),
+                            user_id: ctx.user_id.clone(),
+                            group_id: ctx.group_id.clone(),
                             ..Default::default()
                         }),
                         Some(&query_vec),
@@ -228,6 +232,9 @@ pub async fn run_agent_loop(
                         5,
                         Some(MemoryFilter {
                             agent_id: Some(session.agent_id),
+                            tenant_id: ctx.tenant_id.clone(),
+                            user_id: ctx.user_id.clone(),
+                            group_id: ctx.group_id.clone(),
                             ..Default::default()
                         }),
                     )
@@ -242,6 +249,9 @@ pub async fn run_agent_loop(
                 5,
                 Some(MemoryFilter {
                     agent_id: Some(session.agent_id),
+                    tenant_id: ctx.tenant_id.clone(),
+                    user_id: ctx.user_id.clone(),
+                    group_id: ctx.group_id.clone(),
                     ..Default::default()
                 }),
             )
@@ -622,6 +632,7 @@ pub async fn run_agent_loop(
                                     MemorySource::Conversation,
                                     "episodic",
                                     HashMap::new(),
+                                    ctx,
                                 )
                                 .await;
                         }
@@ -634,6 +645,7 @@ pub async fn run_agent_loop(
                             MemorySource::Conversation,
                             "episodic",
                             HashMap::new(),
+                            ctx,
                         )
                         .await;
                 }
@@ -818,6 +830,7 @@ pub async fn run_agent_loop(
                             tts_engine,
                             docker_config,
                             process_manager,
+                            ctx,
                         ),
                     )
                     .await
@@ -1393,6 +1406,7 @@ pub async fn run_agent_loop_streaming(
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
+    ctx: &openfang_types::context::RequestContext,
 ) -> OpenFangResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting streaming agent loop");
 
@@ -1414,6 +1428,9 @@ pub async fn run_agent_loop_streaming(
                         5,
                         Some(MemoryFilter {
                             agent_id: Some(session.agent_id),
+                            tenant_id: ctx.tenant_id.clone(),
+                            user_id: ctx.user_id.clone(),
+                            group_id: ctx.group_id.clone(),
                             ..Default::default()
                         }),
                         Some(&query_vec),
@@ -1429,6 +1446,9 @@ pub async fn run_agent_loop_streaming(
                         5,
                         Some(MemoryFilter {
                             agent_id: Some(session.agent_id),
+                            tenant_id: ctx.tenant_id.clone(),
+                            user_id: ctx.user_id.clone(),
+                            group_id: ctx.group_id.clone(),
                             ..Default::default()
                         }),
                     )
@@ -1443,6 +1463,9 @@ pub async fn run_agent_loop_streaming(
                 5,
                 Some(MemoryFilter {
                     agent_id: Some(session.agent_id),
+                    tenant_id: ctx.tenant_id.clone(),
+                    user_id: ctx.user_id.clone(),
+                    group_id: ctx.group_id.clone(),
                     ..Default::default()
                 }),
             )
@@ -1808,6 +1831,7 @@ pub async fn run_agent_loop_streaming(
                                     MemorySource::Conversation,
                                     "episodic",
                                     HashMap::new(),
+                                    ctx,
                                 )
                                 .await;
                         }
@@ -1820,6 +1844,7 @@ pub async fn run_agent_loop_streaming(
                             MemorySource::Conversation,
                             "episodic",
                             HashMap::new(),
+                            ctx,
                         )
                         .await;
                 }
@@ -1997,6 +2022,7 @@ pub async fn run_agent_loop_streaming(
                             tts_engine,
                             docker_config,
                             process_manager,
+                            ctx,
                         ),
                     )
                     .await
@@ -3251,6 +3277,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3280,6 +3307,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Loop should complete without error");
@@ -3304,6 +3332,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3333,6 +3362,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Loop should complete without error");
@@ -3359,6 +3389,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3388,6 +3419,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Loop should complete without error");
@@ -3412,6 +3444,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3441,6 +3474,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Loop should complete without error");
@@ -3456,6 +3490,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3487,6 +3522,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -3582,6 +3618,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3611,6 +3648,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Loop should recover via retry");
@@ -3629,6 +3667,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3658,6 +3697,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Loop should complete with fallback");
@@ -3682,6 +3722,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -3713,6 +3754,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4648,6 +4690,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -4689,6 +4732,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Agent loop should complete");
@@ -4719,6 +4763,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -4759,6 +4804,7 @@ mod tests {
             None,
             None,
             None,
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Agent loop should recover nested XML tool calls");
@@ -4796,6 +4842,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -4831,6 +4878,7 @@ mod tests {
             None,
             None,
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Normal loop should complete");
@@ -4851,6 +4899,7 @@ mod tests {
         let mut session = openfang_memory::session::Session {
             id: openfang_types::agent::SessionId::new(),
             agent_id,
+            ctx: openfang_types::context::RequestContext::default(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
@@ -4894,6 +4943,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            &openfang_types::context::RequestContext::default(),
         )
         .await
         .expect("Streaming loop should complete");

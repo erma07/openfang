@@ -275,6 +275,7 @@ impl SemanticBackend for HttpSemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<MemoryId> {
         let source_str = format!("{:?}", source).to_lowercase();
         let importance = metadata
@@ -301,7 +302,7 @@ impl SemanticBackend for HttpSemanticStore {
             Err(e) => {
                 warn!(error = %e, "HTTP memory store failed, falling back to local");
                 self.fallback
-                    .remember(agent_id, content, source, scope, metadata, embedding)
+                    .remember(agent_id, content, source, scope, metadata, embedding, ctx)
             }
         }
     }
@@ -347,6 +348,7 @@ impl SemanticBackend for HttpSemanticStore {
                             accessed_at: Utc::now(),
                             access_count: 0,
                             scope: r.category.unwrap_or_else(|| "general".to_string()),
+                            ctx: openfang_types::context::RequestContext::default(),
                         }
                     })
                     .collect();

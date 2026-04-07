@@ -195,12 +195,14 @@ fn parse_pumble_event(event: &serde_json::Value, own_bot_id: &str) -> Option<Cha
         sender: ChannelUser {
             platform_id: channel_id,
             display_name: user_name.to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group,
+        group_id: None,
         thread_id: thread_ts,
         metadata,
     })

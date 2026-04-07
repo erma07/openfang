@@ -230,6 +230,7 @@ mod tests {
         let user = ChannelUser {
             platform_id: "user@example.com".to_string(),
             display_name: "Test User".to_string(),
+            user_id: None,
             openfang_user: None,
         };
         let result = adapter

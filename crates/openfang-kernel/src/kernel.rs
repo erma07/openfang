@@ -1,6 +1,6 @@
 //! OpenFangKernel — assembles all subsystems and provides the main API.
 
-use crate::auth::AuthManager;
+use crate::auth::{Action, AuthManager};
 use crate::background::{self, BackgroundExecutor};
 use crate::capabilities::CapabilityManager;
 use crate::config::load_config;
@@ -161,6 +161,14 @@ pub struct OpenFangKernel {
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenFangKernel>>,
+}
+
+/// A kernel view scoped to a specific tenant/user/group context.
+/// Created via `kernel.scoped(ctx)`. All operations are implicitly
+/// scoped — no need to pass ctx to every method.
+pub struct ScopedKernel<'a> {
+    pub kernel: &'a OpenFangKernel,
+    pub ctx: openfang_types::context::RequestContext,
 }
 
 /// Bounded in-memory delivery receipt tracker.
@@ -503,6 +511,52 @@ fn gethostname() -> Option<String> {
 }
 
 impl OpenFangKernel {
+    /// Create a scoped view of this kernel for a specific request context.
+    pub fn scoped(&self, ctx: openfang_types::context::RequestContext) -> ScopedKernel<'_> {
+        ScopedKernel { kernel: self, ctx }
+    }
+
+    /// Check if a config entry is visible to the given request context.
+    fn config_visible_to(
+        scope_tenants: &[String],
+        scope_groups: &[String],
+        scope_users: &[String],
+        ctx: &openfang_types::context::RequestContext,
+    ) -> bool {
+        if !scope_users.is_empty() {
+            return ctx.user_id.as_ref().is_some_and(|u| scope_users.contains(u));
+        }
+        if !scope_groups.is_empty() {
+            let ctx_group_key = match (&ctx.tenant_id, &ctx.group_id) {
+                (Some(t), Some(g)) => format!("{t}/{g}"),
+                _ => return false,
+            };
+            return scope_groups.contains(&ctx_group_key);
+        }
+        if !scope_tenants.is_empty() {
+            return ctx.tenant_id.as_ref().is_some_and(|t| scope_tenants.contains(t));
+        }
+        true
+    }
+
+    pub fn mcp_servers_for_ctx(&self, ctx: &openfang_types::context::RequestContext) -> Vec<&openfang_types::config::McpServerConfigEntry> {
+        self.config.mcp_servers.iter().filter(|s| {
+            Self::config_visible_to(&s.scope_tenants, &s.scope_groups, &s.scope_users, ctx)
+        }).collect()
+    }
+
+    pub fn budget_for_ctx(&self, ctx: &openfang_types::context::RequestContext) -> (f64, f64) {
+        // Check tenant-specific budget from TenantConfig
+        if let Some(ref tid) = ctx.tenant_id {
+            if let Some(tenant) = self.config.tenants.iter().find(|t| t.id == *tid) {
+                let daily = tenant.max_daily_usd.unwrap_or(self.config.budget.max_daily_usd);
+                let monthly = tenant.max_monthly_usd.unwrap_or(self.config.budget.max_monthly_usd);
+                return (daily, monthly);
+            }
+        }
+        (self.config.budget.max_daily_usd, self.config.budget.max_monthly_usd)
+    }
+
     /// Boot the kernel with configuration from the given path.
     pub fn boot(config_path: Option<&Path>) -> KernelResult<Self> {
         let config = load_config(config_path);
@@ -638,7 +692,7 @@ impl OpenFangKernel {
                 config.resolve_api_key_env(&config.default_model.provider)
             };
             credential_resolver
-                .resolve(&env_var)
+                .resolve(&env_var, None)
                 .map(|z: zeroize::Zeroizing<String>| z.to_string())
         };
         let driver_config = DriverConfig {
@@ -670,7 +724,7 @@ impl OpenFangKernel {
                     let auto_config = DriverConfig {
                         provider: provider.to_string(),
                         api_key: credential_resolver
-                            .resolve(env_var)
+                            .resolve(env_var, None)
                             .map(|z: zeroize::Zeroizing<String>| z.to_string()),
                         base_url: config.provider_urls.get(provider).cloned(),
                         skip_permissions: true,
@@ -711,7 +765,7 @@ impl OpenFangKernel {
                     config.resolve_api_key_env(&fb.provider)
                 };
                 credential_resolver
-                    .resolve(&env_var)
+                    .resolve(&env_var, None)
                     .map(|z: zeroize::Zeroizing<String>| z.to_string())
             };
             let fb_config = DriverConfig {
@@ -766,7 +820,7 @@ impl OpenFangKernel {
             .map_err(|e| KernelError::BootFailed(format!("WASM sandbox init failed: {e}")))?;
 
         // Initialize RBAC authentication manager
-        let auth = AuthManager::new(&config.users);
+        let auth = AuthManager::new(&config.users, &config.groups);
         if auth.is_enabled() {
             info!("RBAC enabled with {} users", auth.user_count());
         }
@@ -1363,7 +1417,7 @@ impl OpenFangKernel {
 
     /// Spawn a new agent from a manifest, optionally linking to a parent agent.
     pub fn spawn_agent(&self, manifest: AgentManifest) -> KernelResult<AgentId> {
-        self.spawn_agent_with_parent(manifest, None, None)
+        self.spawn_agent_with_parent(manifest, None, None, &openfang_types::context::RequestContext::default())
     }
 
     /// Spawn a new agent with an optional parent for lineage tracking.
@@ -1373,7 +1427,17 @@ impl OpenFangKernel {
         manifest: AgentManifest,
         parent: Option<AgentId>,
         fixed_id: Option<AgentId>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> KernelResult<AgentId> {
+        // Auth — only check if user_id is present (anonymous access skips auth)
+        if let Some(ref user_id_str) = ctx.user_id {
+            if let Ok(user_id) = user_id_str.parse::<openfang_types::agent::UserId>() {
+                self.auth
+                    .authorize(user_id, &Action::SpawnAgent)
+                    .map_err(KernelError::OpenFang)?;
+            }
+        }
+
         let agent_id = fixed_id.unwrap_or_default();
         let name = manifest.name.clone();
 
@@ -1383,7 +1447,7 @@ impl OpenFangKernel {
         // and database are in sync (fixes duplicate session bug #651).
         let session = self
             .memory
-            .create_session(agent_id)
+            .create_session(agent_id, ctx)
             .map_err(KernelError::OpenFang)?;
         let session_id = session.id;
 
@@ -1497,6 +1561,8 @@ impl OpenFangKernel {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
+            owner_user_id: None,
         };
         self.registry
             .register(entry.clone())
@@ -1516,6 +1582,7 @@ impl OpenFangKernel {
 
         // SECURITY: Record agent spawn in audit trail
         self.audit_log.record(
+            ctx,
             agent_id.to_string(),
             openfang_runtime::audit::AuditAction::AgentSpawn,
             format!("name={name}, parent={parent:?}"),
@@ -1604,6 +1671,7 @@ impl OpenFangKernel {
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
+        let ctx = openfang_types::context::RequestContext::default();
         self.send_message_with_handle_and_blocks(
             agent_id,
             message,
@@ -1611,6 +1679,7 @@ impl OpenFangKernel {
             Some(blocks),
             None,
             None,
+            ctx,
         )
         .await
     }
@@ -1624,6 +1693,10 @@ impl OpenFangKernel {
         sender_id: Option<String>,
         sender_name: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
+        let ctx = openfang_types::context::RequestContext {
+            user_id: sender_id.clone(),
+            ..Default::default()
+        };
         self.send_message_with_handle_and_blocks(
             agent_id,
             message,
@@ -1631,6 +1704,7 @@ impl OpenFangKernel {
             None,
             sender_id,
             sender_name,
+            ctx,
         )
         .await
     }
@@ -1644,6 +1718,7 @@ impl OpenFangKernel {
     /// Per-agent locking ensures that concurrent messages for the same agent
     /// are serialized (preventing session corruption), while messages for
     /// different agents run in parallel.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_message_with_handle_and_blocks(
         &self,
         agent_id: AgentId,
@@ -1652,6 +1727,7 @@ impl OpenFangKernel {
         content_blocks: Option<Vec<openfang_types::message::ContentBlock>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        ctx: openfang_types::context::RequestContext,
     ) -> KernelResult<AgentLoopResult> {
         // Acquire per-agent lock to serialize concurrent messages for the same agent.
         // This prevents session corruption when multiple messages arrive in quick
@@ -1664,10 +1740,26 @@ impl OpenFangKernel {
             .clone();
         let _guard = lock.lock().await;
 
+        // Auth — only check if user_id is present (anonymous access skips auth)
+        if let Some(ref user_id_str) = ctx.user_id {
+            if let Ok(user_id) = user_id_str.parse::<openfang_types::agent::UserId>() {
+                self.auth
+                    .authorize(user_id, &Action::ChatWithAgent)
+                    .map_err(KernelError::OpenFang)?;
+            }
+        }
+
         // Enforce quota before running the agent loop
         self.scheduler
             .check_quota(agent_id)
             .map_err(KernelError::OpenFang)?;
+
+        // Per-tenant budget enforcement
+        if let Some(ref tid) = ctx.tenant_id {
+            let (daily_limit, monthly_limit) = self.budget_for_ctx(&ctx);
+            self.metering.check_tenant_budget(tid, daily_limit, monthly_limit)
+                .map_err(KernelError::OpenFang)?;
+        }
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
@@ -1689,6 +1781,7 @@ impl OpenFangKernel {
                 content_blocks,
                 sender_id,
                 sender_name,
+                ctx.clone(),
             )
             .await
         };
@@ -1703,6 +1796,7 @@ impl OpenFangKernel {
 
                 // SECURITY: Record successful message in audit trail
                 self.audit_log.record(
+                    &ctx,
                     agent_id.to_string(),
                     openfang_runtime::audit::AuditAction::AgentMessage,
                     format!(
@@ -1717,6 +1811,7 @@ impl OpenFangKernel {
             Err(e) => {
                 // SECURITY: Record failed message in audit trail
                 self.audit_log.record(
+                    &ctx,
                     agent_id.to_string(),
                     openfang_runtime::audit::AuditAction::AgentMessage,
                     "agent loop failed",
@@ -1739,6 +1834,7 @@ impl OpenFangKernel {
     ///
     /// WASM and Python agents don't support true streaming — they execute
     /// synchronously and emit a single `TextDelta` + `ContentComplete` pair.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_message_streaming(
         self: &Arc<Self>,
         agent_id: AgentId,
@@ -1747,6 +1843,7 @@ impl OpenFangKernel {
         sender_id: Option<String>,
         sender_name: Option<String>,
         content_blocks: Option<Vec<openfang_types::message::ContentBlock>>,
+        ctx: openfang_types::context::RequestContext,
     ) -> KernelResult<(
         tokio::sync::mpsc::Receiver<StreamEvent>,
         tokio::task::JoinHandle<KernelResult<AgentLoopResult>>,
@@ -1822,6 +1919,7 @@ impl OpenFangKernel {
             .unwrap_or_else(|| openfang_memory::session::Session {
                 id: entry.session_id,
                 agent_id,
+                ctx: openfang_types::context::RequestContext::default(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
@@ -2016,6 +2114,11 @@ impl OpenFangKernel {
                 ),
                 sender_id,
                 sender_name,
+                ctx: openfang_types::context::RequestContext {
+                    tenant_id: session.ctx.tenant_id.clone(),
+                    group_id: session.ctx.group_id.clone(),
+                    user_id: session.ctx.user_id.clone(),
+                },
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -2116,6 +2219,7 @@ impl OpenFangKernel {
                 ctx_window,
                 Some(&kernel_clone.process_manager),
                 content_blocks,
+                &ctx,
             )
             .await;
 
@@ -2169,6 +2273,7 @@ impl OpenFangKernel {
                         .metering
                         .record(&openfang_memory::usage::UsageRecord {
                             agent_id,
+                            tenant_id: session.ctx.tenant_id.clone(),
                             model: model.clone(),
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
@@ -2372,6 +2477,7 @@ impl OpenFangKernel {
         content_blocks: Option<Vec<openfang_types::message::ContentBlock>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        ctx: openfang_types::context::RequestContext,
     ) -> KernelResult<AgentLoopResult> {
         // Check metering quota before starting
         self.metering
@@ -2385,6 +2491,7 @@ impl OpenFangKernel {
             .unwrap_or_else(|| openfang_memory::session::Session {
                 id: entry.session_id,
                 agent_id,
+                ctx: openfang_types::context::RequestContext::default(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
@@ -2577,6 +2684,11 @@ impl OpenFangKernel {
                 ),
                 sender_id,
                 sender_name,
+                ctx: openfang_types::context::RequestContext {
+                    tenant_id: session.ctx.tenant_id.clone(),
+                    group_id: session.ctx.group_id.clone(),
+                    user_id: session.ctx.user_id.clone(),
+                },
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -2687,6 +2799,7 @@ impl OpenFangKernel {
             ctx_window,
             Some(&self.process_manager),
             content_blocks,
+            &ctx,
         )
         .await
         .map_err(KernelError::OpenFang)?;
@@ -2721,6 +2834,7 @@ impl OpenFangKernel {
         );
         let _ = self.metering.record(&openfang_memory::usage::UsageRecord {
             agent_id,
+            tenant_id: session.ctx.tenant_id.clone(),
             model: model.clone(),
             input_tokens: result.total_usage.input_tokens,
             output_tokens: result.total_usage.output_tokens,
@@ -2762,7 +2876,7 @@ impl OpenFangKernel {
 
     /// Reset an agent's session — auto-saves a summary to memory, then clears messages
     /// and creates a fresh session ID.
-    pub fn reset_session(&self, agent_id: AgentId) -> KernelResult<()> {
+    pub fn reset_session(&self, agent_id: AgentId, ctx: &openfang_types::context::RequestContext) -> KernelResult<()> {
         let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
         })?;
@@ -2780,7 +2894,7 @@ impl OpenFangKernel {
         // Create a fresh session
         let new_session = self
             .memory
-            .create_session(agent_id)
+            .create_session(agent_id, ctx)
             .map_err(KernelError::OpenFang)?;
 
         // Update registry with new session ID
@@ -2798,7 +2912,7 @@ impl OpenFangKernel {
     /// Clear ALL conversation history for an agent (sessions + canonical).
     ///
     /// Creates a fresh empty session afterward so the agent is still usable.
-    pub fn clear_agent_history(&self, agent_id: AgentId) -> KernelResult<()> {
+    pub fn clear_agent_history(&self, agent_id: AgentId, ctx: &openfang_types::context::RequestContext) -> KernelResult<()> {
         let _entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
         })?;
@@ -2812,7 +2926,7 @@ impl OpenFangKernel {
         // Create a fresh session
         let new_session = self
             .memory
-            .create_session(agent_id)
+            .create_session(agent_id, ctx)
             .map_err(KernelError::OpenFang)?;
 
         // Update registry with new session ID
@@ -2856,6 +2970,7 @@ impl OpenFangKernel {
         &self,
         agent_id: AgentId,
         label: Option<&str>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> KernelResult<serde_json::Value> {
         // Verify agent exists
         let _entry = self.registry.get(agent_id).ok_or_else(|| {
@@ -2864,7 +2979,7 @@ impl OpenFangKernel {
 
         let session = self
             .memory
-            .create_session_with_label(agent_id, label)
+            .create_session_with_label(agent_id, label, ctx)
             .map_err(KernelError::OpenFang)?;
 
         // Switch to the new session
@@ -3031,7 +3146,15 @@ impl OpenFangKernel {
         agent_id: AgentId,
         model: &str,
         explicit_provider: Option<&str>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> KernelResult<()> {
+        if let Some(ref uid) = ctx.user_id {
+            if let Ok(user_id) = uid.parse::<openfang_types::agent::UserId>() {
+                self.auth
+                    .authorize(user_id, &Action::ModifyConfig)
+                    .map_err(KernelError::OpenFang)?;
+            }
+        }
         let catalog_entry = self.model_catalog.read().ok().and_then(|catalog| {
             // When the caller specifies a provider, use provider-aware lookup
             // so we resolve the model on the correct provider — not a builtin
@@ -3114,7 +3237,14 @@ impl OpenFangKernel {
     }
 
     /// Update an agent's skill allowlist. Empty = all skills (backward compat).
-    pub fn set_agent_skills(&self, agent_id: AgentId, skills: Vec<String>) -> KernelResult<()> {
+    pub fn set_agent_skills(&self, agent_id: AgentId, skills: Vec<String>, ctx: &openfang_types::context::RequestContext) -> KernelResult<()> {
+        if let Some(ref uid) = ctx.user_id {
+            if let Ok(user_id) = uid.parse::<openfang_types::agent::UserId>() {
+                self.auth
+                    .authorize(user_id, &Action::ModifyConfig)
+                    .map_err(KernelError::OpenFang)?;
+            }
+        }
         // Validate skill names if allowlist is non-empty
         if !skills.is_empty() {
             let registry = self
@@ -3148,7 +3278,15 @@ impl OpenFangKernel {
         &self,
         agent_id: AgentId,
         servers: Vec<String>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> KernelResult<()> {
+        if let Some(ref uid) = ctx.user_id {
+            if let Ok(user_id) = uid.parse::<openfang_types::agent::UserId>() {
+                self.auth
+                    .authorize(user_id, &Action::ModifyConfig)
+                    .map_err(KernelError::OpenFang)?;
+            }
+        }
         // Validate server names if allowlist is non-empty
         if !servers.is_empty() {
             if let Ok(mcp_tools) = self.mcp_tools.lock() {
@@ -3275,6 +3413,7 @@ impl OpenFangKernel {
             .unwrap_or_else(|| openfang_memory::session::Session {
                 id: entry.session_id,
                 agent_id,
+                ctx: openfang_types::context::RequestContext::default(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
@@ -3357,6 +3496,7 @@ impl OpenFangKernel {
             .unwrap_or_else(|| openfang_memory::session::Session {
                 id: entry.session_id,
                 agent_id,
+                ctx: openfang_types::context::RequestContext::default(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
@@ -3381,7 +3521,16 @@ impl OpenFangKernel {
     }
 
     /// Kill an agent.
-    pub fn kill_agent(&self, agent_id: AgentId) -> KernelResult<()> {
+    pub fn kill_agent(&self, agent_id: AgentId, ctx: &openfang_types::context::RequestContext) -> KernelResult<()> {
+        // Auth — only check if user_id is present (anonymous access skips auth)
+        if let Some(ref user_id_str) = ctx.user_id {
+            if let Ok(user_id) = user_id_str.parse::<openfang_types::agent::UserId>() {
+                self.auth
+                    .authorize(user_id, &Action::KillAgent)
+                    .map_err(KernelError::OpenFang)?;
+            }
+        }
+
         let entry = self
             .registry
             .remove(agent_id)
@@ -3405,6 +3554,7 @@ impl OpenFangKernel {
 
         // SECURITY: Record agent kill in audit trail
         self.audit_log.record(
+            ctx,
             agent_id.to_string(),
             openfang_runtime::audit::AuditAction::AgentKill,
             format!("name={}", entry.name),
@@ -3589,7 +3739,7 @@ impl OpenFangKernel {
             .unwrap_or_default();
         if let Some(old) = existing {
             info!(agent = %old.name, id = %old.id, "Removing existing hand agent for reactivation");
-            let _ = self.kill_agent(old.id);
+            let _ = self.kill_agent(old.id, &openfang_types::context::RequestContext::default());
         }
 
         // Spawn the agent with a fixed ID based on hand_id for stable identity across restarts.
@@ -3602,7 +3752,7 @@ impl OpenFangKernel {
         } else {
             AgentId::from_string(hand_id)
         };
-        let agent_id = self.spawn_agent_with_parent(manifest, None, Some(fixed_agent_id))?;
+        let agent_id = self.spawn_agent_with_parent(manifest, None, Some(fixed_agent_id), &openfang_types::context::RequestContext::default())?;
 
         // Restore triggers from the old agent under the new agent ID (#519).
         if !saved_triggers.is_empty() {
@@ -3688,7 +3838,7 @@ impl OpenFangKernel {
             .map_err(|e| KernelError::OpenFang(OpenFangError::Internal(e.to_string())))?;
 
         if let Some(agent_id) = instance.agent_id {
-            if let Err(e) = self.kill_agent(agent_id) {
+            if let Err(e) = self.kill_agent(agent_id, &openfang_types::context::RequestContext::default()) {
                 warn!(agent = %agent_id, error = %e, "Failed to kill hand agent (may already be dead)");
             }
         } else {
@@ -3696,7 +3846,7 @@ impl OpenFangKernel {
             let hand_tag = format!("hand:{}", instance.hand_id);
             for entry in self.registry.list() {
                 if entry.tags.contains(&hand_tag) {
-                    if let Err(e) = self.kill_agent(entry.id) {
+                    if let Err(e) = self.kill_agent(entry.id, &openfang_types::context::RequestContext::default()) {
                         warn!(agent = %entry.id, error = %e, "Failed to kill orphaned hand agent");
                     } else {
                         info!(agent_id = %entry.id, hand_id = %instance.hand_id, "Cleaned up orphaned hand agent");
@@ -4704,7 +4854,7 @@ impl OpenFangKernel {
         self.credential_resolver
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .resolve(key)
+            .resolve(key, None)
             .map(|z| z.to_string())
     }
 
@@ -5396,6 +5546,8 @@ impl OpenFangKernel {
 
         // Step 3: Add MCP tools (filtered by agent's MCP server allowlist,
         // then by declared tools).
+        // TODO: filter by context — use mcp_servers_for_ctx() to restrict
+        // which MCP server tools are visible based on scope_tenants/scope_groups/scope_users.
         if let Ok(mcp_tools) = self.mcp_tools.lock() {
             let mcp_candidates: Vec<ToolDefinition> = if mcp_allowlist.is_empty() {
                 mcp_tools.iter().cloned().collect()
@@ -6109,7 +6261,7 @@ impl KernelHandle for OpenFangKernel {
         let name = manifest.name.clone();
         let parent = parent_id.and_then(|pid| pid.parse::<AgentId>().ok());
         let id = self
-            .spawn_agent_with_parent(manifest, parent, None)
+            .spawn_agent_with_parent(manifest, parent, None, &openfang_types::context::RequestContext::default())
             .map_err(|e| format!("Spawn failed: {e}"))?;
         Ok((id.to_string(), name))
     }
@@ -6158,17 +6310,17 @@ impl KernelHandle for OpenFangKernel {
         let id: AgentId = agent_id
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
-        OpenFangKernel::kill_agent(self, id).map_err(|e| format!("Kill failed: {e}"))
+        OpenFangKernel::kill_agent(self, id, &openfang_types::context::RequestContext::default()).map_err(|e| format!("Kill failed: {e}"))
     }
 
-    fn memory_store(&self, key: &str, value: serde_json::Value) -> Result<(), String> {
+    fn memory_store(&self, _ctx: &openfang_types::context::RequestContext, key: &str, value: serde_json::Value) -> Result<(), String> {
         let agent_id = shared_memory_agent_id();
         self.memory
             .structured_set(agent_id, key, value)
             .map_err(|e| format!("Memory store failed: {e}"))
     }
 
-    fn memory_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
+    fn memory_recall(&self, _ctx: &openfang_types::context::RequestContext, key: &str) -> Result<Option<serde_json::Value>, String> {
         let agent_id = shared_memory_agent_id();
         self.memory
             .structured_get(agent_id, key)
@@ -6259,6 +6411,7 @@ impl KernelHandle for OpenFangKernel {
 
     async fn knowledge_add_entity(
         &self,
+        _ctx: &openfang_types::context::RequestContext,
         entity: openfang_types::memory::Entity,
     ) -> Result<String, String> {
         self.memory
@@ -6269,6 +6422,7 @@ impl KernelHandle for OpenFangKernel {
 
     async fn knowledge_add_relation(
         &self,
+        _ctx: &openfang_types::context::RequestContext,
         relation: openfang_types::memory::Relation,
     ) -> Result<String, String> {
         self.memory
@@ -6279,6 +6433,7 @@ impl KernelHandle for OpenFangKernel {
 
     async fn knowledge_query(
         &self,
+        _ctx: &openfang_types::context::RequestContext,
         pattern: openfang_types::memory::GraphPattern,
     ) -> Result<Vec<openfang_types::memory::GraphMatch>, String> {
         self.memory
@@ -6588,6 +6743,7 @@ impl KernelHandle for OpenFangKernel {
         let user = openfang_channels::types::ChannelUser {
             platform_id: recipient.to_string(),
             display_name: recipient.to_string(),
+            user_id: None,
             openfang_user: None,
         };
 
@@ -6650,6 +6806,7 @@ impl KernelHandle for OpenFangKernel {
         let user = openfang_channels::types::ChannelUser {
             platform_id: recipient.to_string(),
             display_name: recipient.to_string(),
+            user_id: None,
             openfang_user: None,
         };
 
@@ -6715,6 +6872,7 @@ impl KernelHandle for OpenFangKernel {
         let user = openfang_channels::types::ChannelUser {
             platform_id: recipient.to_string(),
             display_name: recipient.to_string(),
+            user_id: None,
             openfang_user: None,
         };
 
@@ -6875,6 +7033,9 @@ mod tests {
             exec_policy: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         };
         manifest.capabilities.tools = vec!["file_read".to_string(), "web_fetch".to_string()];
         manifest.capabilities.agent_spawn = true;
@@ -6912,6 +7073,9 @@ mod tests {
             exec_policy: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
+            scope_tenants: vec![],
+            scope_groups: vec![],
+            scope_users: vec![],
         }
     }
 
@@ -6936,6 +7100,8 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
+            owner_user_id: None,
         };
         registry.register(entry).unwrap();
 
@@ -6973,6 +7139,8 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
+            owner_user_id: None,
         };
         registry.register(e1).unwrap();
 
@@ -6996,6 +7164,8 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
+            owner_user_id: None,
         };
         registry.register(e2).unwrap();
 
@@ -7087,5 +7257,40 @@ mod tests {
         );
 
         kernel.shutdown();
+    }
+
+    #[test]
+    fn test_config_visible_global() {
+        let ctx = openfang_types::context::RequestContext::default();
+        assert!(OpenFangKernel::config_visible_to(&[], &[], &[], &ctx));
+    }
+
+    #[test]
+    fn test_config_visible_tenant_match() {
+        let ctx = openfang_types::context::RequestContext { tenant_id: Some("acme".into()), ..Default::default() };
+        assert!(OpenFangKernel::config_visible_to(&["acme".into()], &[], &[], &ctx));
+        assert!(!OpenFangKernel::config_visible_to(&["other".into()], &[], &[], &ctx));
+    }
+
+    #[test]
+    fn test_config_visible_group_match() {
+        let ctx = openfang_types::context::RequestContext { tenant_id: Some("acme".into()), group_id: Some("eng".into()), ..Default::default() };
+        assert!(OpenFangKernel::config_visible_to(&[], &["acme/eng".into()], &[], &ctx));
+        assert!(!OpenFangKernel::config_visible_to(&[], &["acme/design".into()], &[], &ctx));
+    }
+
+    #[test]
+    fn test_config_visible_user_match() {
+        let ctx = openfang_types::context::RequestContext { user_id: Some("alice".into()), ..Default::default() };
+        assert!(OpenFangKernel::config_visible_to(&[], &[], &["alice".into()], &ctx));
+        assert!(!OpenFangKernel::config_visible_to(&[], &[], &["bob".into()], &ctx));
+    }
+
+    #[test]
+    fn test_config_user_scope_takes_priority() {
+        // If scope_users is set, only check user — ignore tenant/group
+        let ctx = openfang_types::context::RequestContext { tenant_id: Some("acme".into()), user_id: Some("alice".into()), ..Default::default() };
+        assert!(OpenFangKernel::config_visible_to(&["other".into()], &[], &["alice".into()], &ctx));
+        // User matches even though tenant doesn't — user scope takes priority
     }
 }

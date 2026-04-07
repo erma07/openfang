@@ -370,12 +370,14 @@ impl ChannelAdapter for KeybaseAdapter {
                             sender: ChannelUser {
                                 platform_id: conv_key.clone(),
                                 display_name: sender_username.to_string(),
+                                user_id: None,
                                 openfang_user: None,
                             },
                             content: msg_content,
                             target_agent: None,
                             timestamp: Utc::now(),
                             is_group,
+                            group_id: None,
                             thread_id: None,
                             metadata: {
                                 let mut m = HashMap::new();

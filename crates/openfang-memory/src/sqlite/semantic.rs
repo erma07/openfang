@@ -30,7 +30,7 @@ impl SemanticStore {
         Self { conn }
     }
 
-    /// Store a new memory fragment (without embedding).
+    /// Store a new memory fragment (without embedding, no scoping).
     pub fn remember(
         &self,
         agent_id: AgentId,
@@ -39,10 +39,12 @@ impl SemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
     ) -> OpenFangResult<MemoryId> {
-        self.remember_with_embedding(agent_id, content, source, scope, metadata, None)
+        let ctx = openfang_types::context::RequestContext::default();
+        self.remember_with_embedding(agent_id, content, source, scope, metadata, None, &ctx)
     }
 
     /// Store a new memory fragment with an optional embedding vector.
+    #[allow(clippy::too_many_arguments)]
     pub fn remember_with_embedding(
         &self,
         agent_id: AgentId,
@@ -51,11 +53,13 @@ impl SemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<MemoryId> {
-        self.remember_sqlite(agent_id, content, source, scope, metadata, embedding)
+        self.remember_sqlite(agent_id, content, source, scope, metadata, embedding, ctx.tenant_id.as_deref(), ctx.user_id.as_deref(), ctx.group_id.as_deref())
     }
 
     /// SQLite implementation of remember_with_embedding.
+    #[allow(clippy::too_many_arguments)]
     fn remember_sqlite(
         &self,
         agent_id: AgentId,
@@ -64,6 +68,9 @@ impl SemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
+        tenant_id: Option<&str>,
+        user_id: Option<&str>,
+        group_id: Option<&str>,
     ) -> OpenFangResult<MemoryId> {
         let conn = self
             .conn
@@ -76,8 +83,8 @@ impl SemanticStore {
         let embedding_bytes: Option<Vec<u8>> = embedding.map(embedding_to_bytes);
 
         conn.execute(
-            "INSERT INTO memories (id, agent_id, content, source, scope, confidence, metadata, created_at, accessed_at, access_count, deleted, embedding)
-             VALUES (?1, ?2, ?3, ?4, ?5, 1.0, ?6, ?7, ?7, 0, 0, ?8)",
+            "INSERT INTO memories (id, agent_id, content, source, scope, confidence, metadata, created_at, accessed_at, access_count, deleted, embedding, tenant_id, user_id, group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1.0, ?6, ?7, ?7, 0, 0, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 id.0.to_string(),
                 agent_id.0.to_string(),
@@ -87,6 +94,9 @@ impl SemanticStore {
                 meta_str,
                 now,
                 embedding_bytes,
+                tenant_id,
+                user_id,
+                group_id,
             ],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -223,6 +233,21 @@ impl SemanticStore {
                 let source_str = helpers::serialize_source(source)?;
                 sql.push_str(&format!(" AND source = ?{param_idx}"));
                 params.push(Box::new(source_str));
+                param_idx += 1;
+            }
+            if let Some(ref tenant_id) = f.tenant_id {
+                sql.push_str(&format!(" AND tenant_id = ?{param_idx}"));
+                params.push(Box::new(tenant_id.clone()));
+                param_idx += 1;
+            }
+            if let Some(ref user_id) = f.user_id {
+                sql.push_str(&format!(" AND user_id = ?{param_idx}"));
+                params.push(Box::new(user_id.clone()));
+                param_idx += 1;
+            }
+            if let Some(ref group_id) = f.group_id {
+                sql.push_str(&format!(" AND group_id = ?{param_idx}"));
+                params.push(Box::new(group_id.clone()));
                 #[allow(unused_assignments)]
                 { param_idx += 1; }
             }
@@ -272,6 +297,7 @@ impl SemanticStore {
                 id, agent_id, content, embedding, metadata, source,
                 confidence: confidence as f32, created_at, accessed_at,
                 access_count: access_count as u64, scope,
+                ctx: openfang_types::context::RequestContext::default(),
             });
         }
 
@@ -371,6 +397,9 @@ impl SemanticStore {
                         continue;
                     }
                 }
+                // Note: tenant_id/user_id/group_id filtering for vec path
+                // would require reading those columns from the JOIN; for now
+                // these are filtered in the brute-force path above.
             }
 
             let id = helpers::parse_memory_id(&id_str)?;
@@ -385,6 +414,7 @@ impl SemanticStore {
                 id, agent_id, content, embedding, metadata, source,
                 confidence: confidence as f32, created_at, accessed_at,
                 access_count: access_count as u64, scope,
+                ctx: openfang_types::context::RequestContext::default(),
             });
 
             if fragments.len() >= limit {
@@ -443,6 +473,7 @@ impl SemanticStore {
 }
 
 impl SemanticBackend for SemanticStore {
+    #[allow(clippy::too_many_arguments)]
     fn remember(
         &self,
         agent_id: AgentId,
@@ -451,8 +482,36 @@ impl SemanticBackend for SemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
+        ctx: &openfang_types::context::RequestContext,
     ) -> OpenFangResult<MemoryId> {
-        SemanticStore::remember_with_embedding(self, agent_id, content, source, scope, metadata, embedding)
+        let conn = self.conn.lock().map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let id = MemoryId::new();
+        let now = chrono::Utc::now().to_rfc3339();
+        let source_str = helpers::serialize_source(&source)?;
+        let meta_str = helpers::serialize_metadata(&metadata)?;
+        let embedding_bytes: Option<Vec<u8>> = embedding.map(embedding_to_bytes);
+
+        conn.execute(
+            "INSERT INTO memories (id, agent_id, content, source, scope, confidence, metadata, created_at, accessed_at, access_count, deleted, embedding, tenant_id, user_id, group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1.0, ?6, ?7, ?7, 0, 0, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                id.0.to_string(), agent_id.0.to_string(), content, source_str, scope,
+                meta_str, now, embedding_bytes,
+                &ctx.tenant_id, &ctx.user_id, &ctx.group_id,
+            ],
+        ).map_err(|e| OpenFangError::Memory(e.to_string()))?;
+
+        // Dual-write to sqlite-vec if embedding provided
+        if let Some(emb) = embedding {
+            let _ = Self::ensure_vec_table(&conn, emb.len());
+            let emb_bytes = embedding_to_bytes(emb);
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO memories_vec (memory_id, embedding) VALUES (?1, ?2)",
+                rusqlite::params![id.0.to_string(), emb_bytes],
+            );
+        }
+
+        Ok(id)
     }
 
     fn recall(
@@ -600,6 +659,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&embedding),
+                &openfang_types::context::RequestContext::default(),
             )
             .unwrap();
         assert_ne!(id.0.to_string(), "");
@@ -623,6 +683,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&emb_rust),
+                &openfang_types::context::RequestContext::default(),
             )
             .unwrap();
         store
@@ -633,6 +694,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&emb_python),
+                &openfang_types::context::RequestContext::default(),
             )
             .unwrap();
         store
@@ -643,6 +705,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&emb_mixed),
+                &openfang_types::context::RequestContext::default(),
             )
             .unwrap();
 
@@ -701,6 +764,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&[1.0, 0.0]),
+                &openfang_types::context::RequestContext::default(),
             )
             .unwrap();
         store

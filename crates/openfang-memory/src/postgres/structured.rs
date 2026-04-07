@@ -118,16 +118,18 @@ impl StructuredBackend for PgStructuredStore {
         let entry_id = entry.id.0.to_string();
         let entry_name = entry.name.clone();
         let session_id = entry.session_id.0.to_string();
+        let tenant_id = entry.tenant_id.clone();
+        let owner_user_id = entry.owner_user_id.clone();
 
         self.block_on_pg(async {
             let client = self.pool.get().await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             client
                 .execute(
-                    "INSERT INTO agents (id, name, manifest, state, session_id, identity, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-                     ON CONFLICT (id) DO UPDATE SET name = $2, manifest = $3, state = $4, session_id = $5, identity = $6, updated_at = NOW()",
-                    &[&entry_id, &entry_name, &manifest_blob, &state_str, &session_id, &identity_json],
+                    "INSERT INTO agents (id, name, manifest, state, session_id, identity, tenant_id, owner_user_id, created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+                     ON CONFLICT (id) DO UPDATE SET name = $2, manifest = $3, state = $4, session_id = $5, identity = $6, tenant_id = $7, owner_user_id = $8, updated_at = NOW()",
+                    &[&entry_id, &entry_name, &manifest_blob, &state_str, &session_id, &identity_json, &tenant_id, &owner_user_id],
                 )
                 .await
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -141,7 +143,7 @@ impl StructuredBackend for PgStructuredStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             let row = client
                 .query_opt(
-                    "SELECT id, name, manifest, state, created_at, session_id, identity FROM agents WHERE id = $1",
+                    "SELECT id, name, manifest, state, created_at, session_id, identity, tenant_id, owner_user_id FROM agents WHERE id = $1",
                     &[&agent_id.0.to_string()],
                 )
                 .await
@@ -155,6 +157,8 @@ impl StructuredBackend for PgStructuredStore {
                     let created_at: chrono::DateTime<chrono::Utc> = row.get(4);
                     let session_id_str: String = row.get(5);
                     let identity_str: String = row.get(6);
+                    let tenant_id: Option<String> = row.get(7);
+                    let owner_user_id: Option<String> = row.get(8);
 
                     let manifest = helpers::deserialize_manifest(&manifest_blob)?;
                     let state = serde_json::from_str(&state_str)
@@ -170,6 +174,7 @@ impl StructuredBackend for PgStructuredStore {
                         parent: None, children: vec![], session_id,
                         tags: vec![], identity,
                         onboarding_completed: false, onboarding_completed_at: None,
+                        tenant_id, owner_user_id,
                     }))
                 }
                 None => Ok(None),
@@ -195,7 +200,7 @@ impl StructuredBackend for PgStructuredStore {
                 .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             let rows = client
                 .query(
-                    "SELECT id, name, manifest, state, created_at, session_id, identity FROM agents",
+                    "SELECT id, name, manifest, state, created_at, session_id, identity, tenant_id, owner_user_id FROM agents",
                     &[],
                 )
                 .await
@@ -210,6 +215,8 @@ impl StructuredBackend for PgStructuredStore {
                 let created_at: chrono::DateTime<chrono::Utc> = row.get(4);
                 let session_id_str: String = row.get(5);
                 let identity_str: String = row.get(6);
+                let tenant_id: Option<String> = row.get(7);
+                let owner_user_id: Option<String> = row.get(8);
 
                 let agent_id = match helpers::parse_agent_id(&id_str) {
                     Ok(id) => id,
@@ -234,6 +241,7 @@ impl StructuredBackend for PgStructuredStore {
                     parent: None, children: vec![], session_id,
                     tags: vec![], identity,
                     onboarding_completed: false, onboarding_completed_at: None,
+                    tenant_id, owner_user_id,
                 });
             }
             Ok(agents)

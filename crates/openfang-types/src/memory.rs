@@ -55,6 +55,9 @@ pub struct MemoryFragment {
     pub id: MemoryId,
     /// Which agent owns this memory.
     pub agent_id: AgentId,
+    /// Request context (tenant/user/group identity) of who created this memory.
+    #[serde(default)]
+    pub ctx: crate::context::RequestContext,
     /// The textual content of this memory.
     pub content: String,
     /// Vector embedding (populated by the semantic store).
@@ -92,6 +95,12 @@ pub struct MemoryFilter {
     pub before: Option<DateTime<Utc>>,
     /// Metadata key-value filters.
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Filter by tenant ID.
+    pub tenant_id: Option<String>,
+    /// Filter by user ID.
+    pub user_id: Option<String>,
+    /// Filter by group ID.
+    pub group_id: Option<String>,
 }
 
 impl MemoryFilter {
@@ -127,6 +136,9 @@ pub struct Entity {
     pub created_at: DateTime<Utc>,
     /// When this entity was last updated.
     pub updated_at: DateTime<Utc>,
+    /// Request context (tenant/user/group identity).
+    #[serde(default)]
+    pub ctx: crate::context::RequestContext,
 }
 
 /// Types of entities in the knowledge graph.
@@ -168,6 +180,9 @@ pub struct Relation {
     pub confidence: f32,
     /// When this relation was created.
     pub created_at: DateTime<Utc>,
+    /// Request context (tenant/user/group identity).
+    #[serde(default)]
+    pub ctx: crate::context::RequestContext,
 }
 
 /// Types of relations in the knowledge graph.
@@ -209,6 +224,8 @@ pub struct GraphPattern {
     pub target: Option<String>,
     /// Maximum traversal depth.
     pub max_depth: u32,
+    /// Filter by tenant ID.
+    pub tenant_id: Option<String>,
 }
 
 /// A result from a graph query.
@@ -291,6 +308,7 @@ pub trait Memory: Send + Sync {
         source: MemorySource,
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
+        ctx: &crate::context::RequestContext,
     ) -> crate::error::OpenFangResult<MemoryId>;
 
     /// Semantic search for relevant memories.
@@ -351,6 +369,7 @@ mod tests {
         let fragment = MemoryFragment {
             id: MemoryId::new(),
             agent_id: AgentId::new(),
+            ctx: crate::context::RequestContext::default(),
             content: "Test memory".to_string(),
             embedding: None,
             metadata: HashMap::new(),

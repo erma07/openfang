@@ -406,12 +406,14 @@ impl ChannelAdapter for WebexAdapter {
                         sender: ChannelUser {
                             platform_id: full_room_id,
                             display_name: sender_email.to_string(),
+                            user_id: None,
                             openfang_user: None,
                         },
                         content: msg_content,
                         target_agent: None,
                         timestamp: Utc::now(),
                         is_group,
+                        group_id: None,
                         thread_id: None,
                         metadata: {
                             let mut m = HashMap::new();

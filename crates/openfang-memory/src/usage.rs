@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub struct UsageRecord {
     /// Which agent made the call.
     pub agent_id: AgentId,
+    /// Tenant that owns this agent (for per-tenant budget enforcement).
+    pub tenant_id: Option<String>,
     /// Model used.
     pub model: String,
     /// Input tokens consumed.

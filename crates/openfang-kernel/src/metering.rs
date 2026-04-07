@@ -207,6 +207,29 @@ impl MeteringEngine {
         input_cost + output_cost
     }
 
+    /// Check per-tenant budget limits (daily and monthly).
+    /// Returns Ok(()) if under all limits, or QuotaExceeded error if over any.
+    /// A limit of 0.0 means no enforcement for that window.
+    pub fn check_tenant_budget(&self, tenant_id: &str, daily_limit: f64, monthly_limit: f64) -> OpenFangResult<()> {
+        if daily_limit > 0.0 {
+            let daily = self.store.query_tenant_daily(tenant_id)?;
+            if daily >= daily_limit {
+                return Err(OpenFangError::QuotaExceeded(format!(
+                    "Tenant {tenant_id} daily budget exceeded: ${daily:.2} >= ${daily_limit:.2}"
+                )));
+            }
+        }
+        if monthly_limit > 0.0 {
+            let monthly = self.store.query_tenant_monthly(tenant_id)?;
+            if monthly >= monthly_limit {
+                return Err(OpenFangError::QuotaExceeded(format!(
+                    "Tenant {tenant_id} monthly budget exceeded: ${monthly:.2} >= ${monthly_limit:.2}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Clean up old usage records.
     pub fn cleanup(&self, days: u32) -> OpenFangResult<usize> {
         self.store.cleanup_old(days)
@@ -534,6 +557,7 @@ mod tests {
         engine
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "claude-haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
@@ -557,6 +581,7 @@ mod tests {
         engine
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "claude-sonnet".to_string(),
                 input_tokens: 10000,
                 output_tokens: 5000,
@@ -584,6 +609,7 @@ mod tests {
         engine
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "claude-opus".to_string(),
                 input_tokens: 100000,
                 output_tokens: 50000,
@@ -794,6 +820,7 @@ mod tests {
         engine
             .record(&UsageRecord {
                 agent_id,
+                tenant_id: None,
                 model: "haiku".to_string(),
                 input_tokens: 500,
                 output_tokens: 200,

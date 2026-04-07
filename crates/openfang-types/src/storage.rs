@@ -8,6 +8,7 @@
 //! types are fully available in `openfang-types`.
 
 use crate::agent::{AgentEntry, AgentId};
+use crate::context::RequestContext;
 use crate::error::OpenFangResult;
 use crate::memory::{
     Entity, GraphMatch, GraphPattern, MemoryFilter, MemoryFragment, MemoryId, MemorySource,
@@ -41,6 +42,7 @@ pub trait StructuredBackend: Send + Sync {
 /// Backend for semantic memory with vector search.
 pub trait SemanticBackend: Send + Sync {
     /// Store a memory fragment, optionally with a pre-computed embedding.
+    #[allow(clippy::too_many_arguments)]
     fn remember(
         &self,
         agent_id: AgentId,
@@ -49,6 +51,7 @@ pub trait SemanticBackend: Send + Sync {
         scope: &str,
         metadata: HashMap<String, Value>,
         embedding: Option<&[f32]>,
+        ctx: &RequestContext,
     ) -> OpenFangResult<MemoryId>;
 
     /// Search for relevant memories, optionally using a query embedding for vector search.
@@ -70,9 +73,9 @@ pub trait SemanticBackend: Send + Sync {
 /// Backend for the knowledge graph.
 pub trait KnowledgeBackend: Send + Sync {
     /// Add an entity to the graph.
-    fn add_entity(&self, entity: Entity) -> OpenFangResult<String>;
+    fn add_entity(&self, entity: Entity, ctx: &RequestContext) -> OpenFangResult<String>;
     /// Add a relation between entities.
-    fn add_relation(&self, relation: Relation) -> OpenFangResult<String>;
+    fn add_relation(&self, relation: Relation, ctx: &RequestContext) -> OpenFangResult<String>;
     /// Query the graph by pattern.
-    fn query_graph(&self, pattern: GraphPattern) -> OpenFangResult<Vec<GraphMatch>>;
+    fn query_graph(&self, pattern: GraphPattern, ctx: &RequestContext) -> OpenFangResult<Vec<GraphMatch>>;
 }

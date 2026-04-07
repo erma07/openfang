@@ -530,12 +530,14 @@ where
                                 sender: ChannelUser {
                                     platform_id: uid,
                                     display_name: cb.sender_nick,
+                                    user_id: None,
                                     openfang_user: None,
                                 },
                                 content,
                                 target_agent: None,
                                 timestamp: Utc::now(),
                                 is_group: cb.conversation_type == "2",
+                                group_id: None,
                                 thread_id: None,
                                 metadata: meta,
                             };

@@ -206,12 +206,14 @@ fn parse_privmsg(line: &IrcLine, bot_nick: &str) -> Option<ChannelMessage> {
         sender: ChannelUser {
             platform_id,
             display_name: sender_nick.to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group,
+        group_id: None,
         thread_id: None,
         metadata: HashMap::new(),
     })

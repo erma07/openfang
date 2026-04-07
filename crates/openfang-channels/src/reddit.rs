@@ -295,12 +295,14 @@ fn parse_reddit_comment(comment: &serde_json::Value, own_username: &str) -> Opti
         sender: ChannelUser {
             platform_id: author.to_string(),
             display_name: author.to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group: true, // Subreddit comments are inherently public/group
+        group_id: None,
         thread_id: Some(subreddit),
         metadata,
     })

@@ -48,6 +48,7 @@ fn compute_entry_hash(
 impl AuditBackend for SqliteAuditStore {
     fn append_entry(
         &self,
+        _ctx: &openfang_types::context::RequestContext,
         agent_id: &str,
         action: &str,
         detail: &str,

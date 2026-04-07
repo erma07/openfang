@@ -451,12 +451,14 @@ impl ChannelAdapter for TwistAdapter {
                                 sender: ChannelUser {
                                     platform_id: thread_id.clone(),
                                     display_name: creator_name.to_string(),
+                                    user_id: None,
                                     openfang_user: None,
                                 },
                                 content: msg_content,
                                 target_agent: None,
                                 timestamp: Utc::now(),
                                 is_group: true,
+                                group_id: None,
                                 thread_id: Some(thread_title.clone()),
                                 metadata: {
                                     let mut m = HashMap::new();

@@ -10,6 +10,8 @@ pub struct Session {
     pub id: SessionId,
     /// Owning agent ID.
     pub agent_id: AgentId,
+    /// Request context (tenant/user/group identity).
+    pub ctx: openfang_types::context::RequestContext,
     /// Conversation messages.
     pub messages: Vec<Message>,
     /// Estimated token count for the context window.
@@ -27,6 +29,8 @@ pub struct Session {
 pub struct CanonicalSession {
     /// The agent this session belongs to.
     pub agent_id: AgentId,
+    /// Request context (tenant/user/group identity).
+    pub ctx: openfang_types::context::RequestContext,
     /// Full message history (post-compaction window).
     pub messages: Vec<Message>,
     /// Index marking how far compaction has processed.

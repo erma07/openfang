@@ -206,6 +206,9 @@ impl IntegrationRegistry {
                     timeout_secs: 30,
                     env,
                     headers: Vec::new(),
+                    scope_tenants: vec![],
+                    scope_groups: vec![],
+                    scope_users: vec![],
                 })
             })
             .collect()

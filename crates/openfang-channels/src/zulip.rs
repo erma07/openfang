@@ -391,12 +391,14 @@ impl ChannelAdapter for ZulipAdapter {
                         sender: ChannelUser {
                             platform_id,
                             display_name: sender_name.to_string(),
+                            user_id: None,
                             openfang_user: None,
                         },
                         content: msg_content,
                         target_agent: None,
                         timestamp: Utc::now(),
                         is_group,
+                        group_id: None,
                         thread_id: if !topic.is_empty() { Some(topic) } else { None },
                         metadata: {
                             let mut m = HashMap::new();

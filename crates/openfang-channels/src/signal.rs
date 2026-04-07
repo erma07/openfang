@@ -195,12 +195,14 @@ impl ChannelAdapter for SignalAdapter {
                         sender: ChannelUser {
                             platform_id: source.clone(),
                             display_name: source_name,
+                            user_id: None,
                             openfang_user: None,
                         },
                         content,
                         target_agent: None,
                         timestamp: Utc::now(),
                         is_group: false,
+                        group_id: None,
                         thread_id: None,
                         metadata: HashMap::new(),
                     };

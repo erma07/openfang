@@ -258,12 +258,14 @@ fn parse_teams_activity(
         sender: ChannelUser {
             platform_id: conversation_id,
             display_name: from_name.to_string(),
+            user_id: None,
             openfang_user: None,
         },
         content,
         target_agent: None,
         timestamp: Utc::now(),
         is_group,
+        group_id: None,
         thread_id: None,
         metadata,
     })
