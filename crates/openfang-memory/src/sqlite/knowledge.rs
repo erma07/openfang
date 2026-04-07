@@ -274,6 +274,16 @@ impl KnowledgeBackend for KnowledgeStore {
             params.push(Box::new(tenant_id.clone()));
             idx += 1;
         }
+        if let Some(ref user_id) = ctx.user_id {
+            sql.push_str(&format!(" AND r.user_id = ?{idx}"));
+            params.push(Box::new(user_id.clone()));
+            idx += 1;
+        }
+        if let Some(ref group_id) = ctx.group_id {
+            sql.push_str(&format!(" AND r.group_id = ?{idx}"));
+            params.push(Box::new(group_id.clone()));
+            idx += 1;
+        }
         let _ = idx;
 
         sql.push_str(" LIMIT 100");

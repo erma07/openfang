@@ -99,6 +99,16 @@ impl KnowledgeBackend for PgKnowledgeStore {
                 params.push(Box::new(tenant_id.clone()));
                 idx += 1;
             }
+            if let Some(ref user_id) = ctx.user_id {
+                conditions.push(format!("r.user_id = ${idx}"));
+                params.push(Box::new(user_id.clone()));
+                idx += 1;
+            }
+            if let Some(ref group_id) = ctx.group_id {
+                conditions.push(format!("r.group_id = ${idx}"));
+                params.push(Box::new(group_id.clone()));
+                idx += 1;
+            }
             let _ = idx;
 
             let where_clause = conditions.join(" AND ");

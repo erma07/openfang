@@ -335,22 +335,68 @@ impl SemanticStore {
         // Fetch more than needed to allow post-filtering
         let fetch_limit = limit * 5;
 
+        // Build dynamic WHERE conditions for tenant/user/group scoping
+        let mut conditions = vec!["m.deleted = 0".to_string()];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut param_idx = 2u32; // ?1 = embedding, so start at ?2
+
+        if let Some(ref f) = *filter {
+            if let Some(agent_id) = f.agent_id {
+                conditions.push(format!("m.agent_id = ?{param_idx}"));
+                params.push(Box::new(agent_id.0.to_string()));
+                param_idx += 1;
+            }
+            if let Some(ref scope) = f.scope {
+                conditions.push(format!("m.scope = ?{param_idx}"));
+                params.push(Box::new(scope.clone()));
+                param_idx += 1;
+            }
+            if let Some(min_conf) = f.min_confidence {
+                conditions.push(format!("m.confidence >= ?{param_idx}"));
+                params.push(Box::new(min_conf as f64));
+                param_idx += 1;
+            }
+            if let Some(ref tenant_id) = f.tenant_id {
+                conditions.push(format!("m.tenant_id = ?{param_idx}"));
+                params.push(Box::new(tenant_id.clone()));
+                param_idx += 1;
+            }
+            if let Some(ref user_id) = f.user_id {
+                conditions.push(format!("m.user_id = ?{param_idx}"));
+                params.push(Box::new(user_id.clone()));
+                param_idx += 1;
+            }
+            if let Some(ref group_id) = f.group_id {
+                conditions.push(format!("m.group_id = ?{param_idx}"));
+                params.push(Box::new(group_id.clone()));
+                #[allow(unused_assignments)]
+                { param_idx += 1; }
+            }
+        }
+
+        let where_clause = conditions.join(" AND ");
+        let sql = format!(
+            "SELECT m.id, m.agent_id, m.content, m.source, m.scope, m.confidence,
+                    m.metadata, m.created_at, m.accessed_at, m.access_count, m.embedding,
+                    v.distance
+             FROM memories_vec AS v
+             JOIN memories AS m ON v.memory_id = m.id
+             WHERE v.embedding MATCH ?1 AND {where_clause}
+             ORDER BY v.distance LIMIT {fetch_limit}"
+        );
+
+        let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        all_params.push(Box::new(query_bytes));
+        all_params.extend(params);
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            all_params.iter().map(|p| p.as_ref()).collect();
+
         let mut stmt = conn
-            .prepare(
-                "SELECT m.id, m.agent_id, m.content, m.source, m.scope, m.confidence,
-                        m.metadata, m.created_at, m.accessed_at, m.access_count, m.embedding,
-                        v.distance
-                 FROM memories_vec v
-                 JOIN memories m ON m.id = v.memory_id
-                 WHERE v.embedding MATCH ?1
-                   AND m.deleted = 0
-                 ORDER BY v.distance
-                 LIMIT ?2",
-            )
+            .prepare(&sql)
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
 
         let rows = stmt
-            .query_map(rusqlite::params![query_bytes, fetch_limit as i64], |row| {
+            .query_map(param_refs.as_slice(), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -374,32 +420,14 @@ impl SemanticStore {
                  created_str, accessed_str, access_count, embedding_bytes, _distance) =
                 row_result.map_err(|e| OpenFangError::Memory(e.to_string()))?;
 
-            // Post-filter by agent, scope, confidence, source
+            // Post-filter by source (cannot be pushed into sqlite-vec query efficiently)
             if let Some(ref f) = filter {
-                if let Some(filter_agent) = f.agent_id {
-                    if agent_str != filter_agent.0.to_string() {
-                        continue;
-                    }
-                }
-                if let Some(ref filter_scope) = f.scope {
-                    if &scope != filter_scope {
-                        continue;
-                    }
-                }
-                if let Some(min_conf) = f.min_confidence {
-                    if (confidence as f32) < min_conf {
-                        continue;
-                    }
-                }
                 if let Some(ref filter_source) = f.source {
                     let source_str_expected = helpers::serialize_source(filter_source).unwrap_or_default();
                     if source_str != source_str_expected {
                         continue;
                     }
                 }
-                // Note: tenant_id/user_id/group_id filtering for vec path
-                // would require reading those columns from the JOIN; for now
-                // these are filtered in the brute-force path above.
             }
 
             let id = helpers::parse_memory_id(&id_str)?;
