@@ -1431,10 +1431,12 @@ impl OpenFangKernel {
     ) -> KernelResult<AgentId> {
         // Auth — only check if user_id is present (anonymous access skips auth)
         if let Some(ref user_id_str) = ctx.user_id {
-            if let Ok(user_id) = user_id_str.parse::<openfang_types::agent::UserId>() {
-                self.auth
-                    .authorize(user_id, &Action::SpawnAgent)
-                    .map_err(KernelError::OpenFang)?;
+            if self.auth.is_enabled() {
+                let user_id = user_id_str.parse::<openfang_types::agent::UserId>()
+                    .map_err(|_| KernelError::OpenFang(
+                        openfang_types::error::OpenFangError::AuthDenied(format!("Invalid user ID: {user_id_str}"))
+                    ))?;
+                self.auth.authorize(user_id, &Action::SpawnAgent).map_err(KernelError::OpenFang)?;
             }
         }
 
@@ -1742,7 +1744,11 @@ impl OpenFangKernel {
 
         // Auth — only check if user_id is present (anonymous access skips auth)
         if let Some(ref user_id_str) = ctx.user_id {
-            if let Ok(user_id) = user_id_str.parse::<openfang_types::agent::UserId>() {
+            if self.auth.is_enabled() {
+                let user_id = user_id_str.parse::<openfang_types::agent::UserId>()
+                    .map_err(|_| KernelError::OpenFang(
+                        openfang_types::error::OpenFangError::AuthDenied(format!("Invalid user ID: {user_id_str}"))
+                    ))?;
                 self.auth
                     .authorize(user_id, &Action::ChatWithAgent)
                     .map_err(KernelError::OpenFang)?;
@@ -3149,10 +3155,12 @@ impl OpenFangKernel {
         ctx: &openfang_types::context::RequestContext,
     ) -> KernelResult<()> {
         if let Some(ref uid) = ctx.user_id {
-            if let Ok(user_id) = uid.parse::<openfang_types::agent::UserId>() {
-                self.auth
-                    .authorize(user_id, &Action::ModifyConfig)
-                    .map_err(KernelError::OpenFang)?;
+            if self.auth.is_enabled() {
+                let user_id = uid.parse::<openfang_types::agent::UserId>()
+                    .map_err(|_| KernelError::OpenFang(
+                        openfang_types::error::OpenFangError::AuthDenied(format!("Invalid user ID: {uid}"))
+                    ))?;
+                self.auth.authorize(user_id, &Action::ModifyConfig).map_err(KernelError::OpenFang)?;
             }
         }
         let catalog_entry = self.model_catalog.read().ok().and_then(|catalog| {
@@ -3239,10 +3247,12 @@ impl OpenFangKernel {
     /// Update an agent's skill allowlist. Empty = all skills (backward compat).
     pub fn set_agent_skills(&self, agent_id: AgentId, skills: Vec<String>, ctx: &openfang_types::context::RequestContext) -> KernelResult<()> {
         if let Some(ref uid) = ctx.user_id {
-            if let Ok(user_id) = uid.parse::<openfang_types::agent::UserId>() {
-                self.auth
-                    .authorize(user_id, &Action::ModifyConfig)
-                    .map_err(KernelError::OpenFang)?;
+            if self.auth.is_enabled() {
+                let user_id = uid.parse::<openfang_types::agent::UserId>()
+                    .map_err(|_| KernelError::OpenFang(
+                        openfang_types::error::OpenFangError::AuthDenied(format!("Invalid user ID: {uid}"))
+                    ))?;
+                self.auth.authorize(user_id, &Action::ModifyConfig).map_err(KernelError::OpenFang)?;
             }
         }
         // Validate skill names if allowlist is non-empty
@@ -3281,10 +3291,12 @@ impl OpenFangKernel {
         ctx: &openfang_types::context::RequestContext,
     ) -> KernelResult<()> {
         if let Some(ref uid) = ctx.user_id {
-            if let Ok(user_id) = uid.parse::<openfang_types::agent::UserId>() {
-                self.auth
-                    .authorize(user_id, &Action::ModifyConfig)
-                    .map_err(KernelError::OpenFang)?;
+            if self.auth.is_enabled() {
+                let user_id = uid.parse::<openfang_types::agent::UserId>()
+                    .map_err(|_| KernelError::OpenFang(
+                        openfang_types::error::OpenFangError::AuthDenied(format!("Invalid user ID: {uid}"))
+                    ))?;
+                self.auth.authorize(user_id, &Action::ModifyConfig).map_err(KernelError::OpenFang)?;
             }
         }
         // Validate server names if allowlist is non-empty
@@ -3524,10 +3536,12 @@ impl OpenFangKernel {
     pub fn kill_agent(&self, agent_id: AgentId, ctx: &openfang_types::context::RequestContext) -> KernelResult<()> {
         // Auth — only check if user_id is present (anonymous access skips auth)
         if let Some(ref user_id_str) = ctx.user_id {
-            if let Ok(user_id) = user_id_str.parse::<openfang_types::agent::UserId>() {
-                self.auth
-                    .authorize(user_id, &Action::KillAgent)
-                    .map_err(KernelError::OpenFang)?;
+            if self.auth.is_enabled() {
+                let user_id = user_id_str.parse::<openfang_types::agent::UserId>()
+                    .map_err(|_| KernelError::OpenFang(
+                        openfang_types::error::OpenFangError::AuthDenied(format!("Invalid user ID: {user_id_str}"))
+                    ))?;
+                self.auth.authorize(user_id, &Action::KillAgent).map_err(KernelError::OpenFang)?;
             }
         }
 

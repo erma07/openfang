@@ -71,6 +71,7 @@ fn compute_entry_hash(
     prev_hash: &str,
     tenant_id: Option<&str>,
     user_id: Option<&str>,
+    group_id: Option<&str>,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(seq.to_string().as_bytes());
@@ -82,6 +83,7 @@ fn compute_entry_hash(
     hasher.update(prev_hash.as_bytes());
     hasher.update(tenant_id.unwrap_or("").as_bytes());
     hasher.update(user_id.unwrap_or("").as_bytes());
+    hasher.update(group_id.unwrap_or("").as_bytes());
     hex::encode(hasher.finalize())
 }
 
@@ -224,6 +226,7 @@ impl AuditLog {
             &prev_hash,
             ctx.tenant_id.as_deref(),
             ctx.user_id.as_deref(),
+            ctx.group_id.as_deref(),
         );
 
         let entry = AuditEntry {
@@ -280,6 +283,7 @@ impl AuditLog {
                 &entry.prev_hash,
                 entry.ctx.tenant_id.as_deref(),
                 entry.ctx.user_id.as_deref(),
+                entry.ctx.group_id.as_deref(),
             );
 
             if recomputed != entry.hash {

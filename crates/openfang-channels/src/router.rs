@@ -369,12 +369,21 @@ impl AgentRouter {
             return false;
         }
         if !binding.scope_groups.is_empty() {
-            let ctx_group_key = match (&ctx.ctx.tenant_id, &ctx.ctx.group_id) {
-                (Some(t), Some(g)) => format!("{t}/{g}"),
-                _ => return false,
-            };
-            if !binding.scope_groups.contains(&ctx_group_key) {
-                return false;
+            match (&ctx.ctx.tenant_id, &ctx.ctx.group_id) {
+                (Some(t), Some(g)) => {
+                    // Match "tenant/group" format
+                    let key = format!("{t}/{g}");
+                    if !binding.scope_groups.contains(&key) {
+                        return false;
+                    }
+                }
+                (None, Some(g)) => {
+                    // Single-tenant mode: match group_id directly
+                    if !binding.scope_groups.contains(g) {
+                        return false;
+                    }
+                }
+                _ => return false, // No group_id at all
             }
         }
         if !binding.scope_tenants.is_empty()
